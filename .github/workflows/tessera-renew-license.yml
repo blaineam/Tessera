@@ -55,6 +55,9 @@ on:
         default: ""
         type: string
 
+permissions:
+  contents: write
+
 jobs:
   renew-license:
     runs-on: ubuntu-latest
