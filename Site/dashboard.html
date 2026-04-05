@@ -32,9 +32,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans
 .glass { background: var(--glass); border: 1px solid var(--glass-border); border-radius: var(--radius); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
 header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--glass-border); background:rgba(10,10,26,0.8); backdrop-filter:blur(12px); position:sticky; top:0; z-index:100; }
 header h1 { font-size:18px; font-weight:600; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
-header nav a { color:var(--text-dim); text-decoration:none; font-size:13px; margin-left:16px; transition:color .2s; }
+header nav { display:flex; align-items:center; gap:16px; }
+header nav a { color:var(--text-dim); text-decoration:none; font-size:13px; transition:color .2s; cursor:pointer; }
 header nav a:hover { color:var(--text); }
 .container { max-width:1200px; margin:0 auto; padding:24px; }
+
+/* App tabs */
+.app-tabs { display:flex; gap:8px; padding:16px 24px 0; max-width:1200px; margin:0 auto; flex-wrap:wrap; }
+.app-tab { padding:8px 16px; border-radius:8px 8px 0 0; border:1px solid var(--glass-border); border-bottom:none; background:var(--glass); color:var(--text-dim); cursor:pointer; font-size:13px; font-weight:500; transition:all .2s; display:flex; align-items:center; gap:8px; }
+.app-tab:hover { background:rgba(255,255,255,0.08); color:var(--text); }
+.app-tab.active { background:rgba(124,92,252,0.15); color:var(--accent); border-color:rgba(124,92,252,0.3); }
+.app-tab .remove-app { opacity:0; font-size:11px; color:var(--red); transition:opacity .2s; padding:0 2px; }
+.app-tab:hover .remove-app { opacity:0.7; }
+.app-tab .remove-app:hover { opacity:1; }
+.app-tab-add { padding:8px 12px; border-radius:8px 8px 0 0; border:1px dashed var(--glass-border); border-bottom:none; background:transparent; color:var(--text-dim); cursor:pointer; font-size:13px; transition:all .2s; }
+.app-tab-add:hover { border-color:var(--accent); color:var(--accent); }
+
 .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px; }
 .stat-card { padding:20px; text-align:center; }
 .stat-card .num { font-size:32px; font-weight:700; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
@@ -82,21 +95,26 @@ input:focus, select:focus { border-color:var(--accent); }
 .toast-success { background:rgba(0,212,170,0.9); color:#000; }
 .toast-error { background:rgba(255,68,102,0.9); color:#fff; }
 .setup-screen { display:flex; align-items:center; justify-content:center; min-height:80vh; }
-.setup-card { padding:32px; max-width:420px; width:100%; }
+.setup-card { padding:32px; max-width:480px; width:100%; }
 .setup-card h2 { margin-bottom:8px; }
 .setup-card p { color:var(--text-dim); font-size:13px; margin-bottom:20px; }
 .setup-card .form-group { margin-bottom:14px; }
 .setup-card .form-group label { display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px; }
 .setup-card .form-group input { width:100%; }
+.setup-card .form-group .hint { font-size:11px; color:var(--text-dim); margin-top:2px; }
+.setup-card hr { border:none; border-top:1px solid var(--glass-border); margin:20px 0; }
 .mono { font-family:'SF Mono',Menlo,monospace; font-size:11px; }
 .hidden { display:none; }
 #app { opacity:0; transition:opacity .3s; }
 #app.loaded { opacity:1; }
+.empty-state { text-align:center; padding:60px 20px; color:var(--text-dim); }
+.empty-state p { margin-top:8px; font-size:13px; }
 @media(max-width:768px) {
     .container { padding:12px; }
     .stats { grid-template-columns:1fr 1fr; }
     table { font-size:12px; }
     th, td { padding:8px 6px; }
+    .app-tabs { padding:12px 12px 0; }
 }
 </style>
 </head>
@@ -106,6 +124,7 @@ input:focus, select:focus { border-color:var(--accent); }
     <nav>
         <a href="index.html">Home</a>
         <a href="#" onclick="showGenerateModal()">+ New License</a>
+        <a href="#" onclick="showSettingsModal()" id="settingsBtn" class="hidden">Settings</a>
         <a href="#" id="disconnectBtn" onclick="disconnect()" class="hidden">Disconnect</a>
     </nav>
 </header>
@@ -121,22 +140,35 @@ input:focus, select:focus { border-color:var(--accent); }
         </div>
         <div class="form-group">
             <label>Repository (owner/repo)</label>
-            <input type="text" id="setupRepo" value="blaineam/blaineam.github.io" placeholder="owner/repo">
+            <input type="text" id="setupRepo" placeholder="owner/repo">
         </div>
         <div class="form-group">
             <label>Branch</label>
             <input type="text" id="setupBranch" value="main" placeholder="main">
         </div>
+        <hr>
+        <p style="color:var(--text);font-weight:600;margin-bottom:12px;">First App</p>
+        <div class="form-group">
+            <label>App Name</label>
+            <input type="text" id="setupAppName" placeholder="My App">
+        </div>
         <div class="form-group">
             <label>Licenses path</label>
-            <input type="text" id="setupLicensesPath" value="licensing/licenses.json">
+            <input type="text" id="setupLicensesPath" value="licensing/licenses.json" placeholder="licensing/my-app/licenses.json">
+            <div class="hint">Path to licenses.json in the repo above</div>
         </div>
         <div class="form-group">
             <label>Revocation path</label>
-            <input type="text" id="setupRevokedPath" value="licensing/revoked.json">
+            <input type="text" id="setupRevokedPath" value="licensing/revoked.json" placeholder="licensing/my-app/revoked.json">
+            <div class="hint">Path to revoked.json in the repo above</div>
         </div>
         <button class="btn btn-primary" onclick="connect()" style="width:100%;margin-top:8px;">Connect</button>
     </div>
+</div>
+
+<!-- App Tabs -->
+<div id="appTabsContainer" class="hidden">
+    <div class="app-tabs" id="appTabs"></div>
 </div>
 
 <!-- Main App -->
@@ -251,49 +283,270 @@ input:focus, select:focus { border-color:var(--accent); }
     </div>
 </div>
 
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+    <div class="modal glass" style="max-width:540px;">
+        <h3>Settings</h3>
+        <div class="form-group">
+            <label>Repository (owner/repo)</label>
+            <input type="text" id="settingsRepo" style="width:100%;">
+        </div>
+        <div class="form-group">
+            <label>Branch</label>
+            <input type="text" id="settingsBranch" style="width:100%;">
+        </div>
+        <hr style="border:none;border-top:1px solid var(--glass-border);margin:16px 0;">
+        <p style="font-weight:600;font-size:14px;margin-bottom:12px;">Apps</p>
+        <div id="settingsAppList"></div>
+        <button class="btn" onclick="settingsAddApp()" style="margin-top:8px;width:100%;">+ Add App</button>
+        <div class="actions" style="margin-top:20px;">
+            <button class="btn" onclick="closeModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Add App Modal -->
+<div class="modal-overlay" id="addAppModal">
+    <div class="modal glass">
+        <h3>Add App</h3>
+        <div class="form-group">
+            <label>App Name</label>
+            <input type="text" id="addAppName" placeholder="My Other App" style="width:100%;">
+        </div>
+        <div class="form-group">
+            <label>Licenses path</label>
+            <input type="text" id="addAppLicensesPath" placeholder="licensing/my-app/licenses.json" style="width:100%;">
+        </div>
+        <div class="form-group">
+            <label>Revocation path</label>
+            <input type="text" id="addAppRevokedPath" placeholder="licensing/my-app/revoked.json" style="width:100%;">
+        </div>
+        <div class="actions">
+            <button class="btn" onclick="closeAddAppModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmAddApp()">Add</button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
 <script>
 // --- State ---
-let config = {};
+let config = { token: '', repo: '', branch: 'main', apps: [], activeApp: 0 };
 let licenses = { licenses: [], updated: '' };
 let revoked = { revoked: [], messages: {}, updated: '' };
 let licensesSHA = '';
 let revokedSHA = '';
 
+// --- Active app helpers ---
+function activeApp() {
+    return config.apps[config.activeApp] || null;
+}
+
 // --- Init ---
 (function init() {
     const saved = localStorage.getItem('tessera_config');
     if (saved) {
-        config = JSON.parse(saved);
-        document.getElementById('setupScreen').classList.add('hidden');
-        document.getElementById('app').classList.remove('hidden');
-        document.getElementById('disconnectBtn').classList.remove('hidden');
+        const parsed = JSON.parse(saved);
+
+        // Migrate old single-app config format
+        if (!parsed.apps) {
+            config = {
+                token: parsed.token,
+                repo: parsed.repo,
+                branch: parsed.branch || 'main',
+                apps: [{
+                    name: 'Default',
+                    licensesPath: parsed.licensesPath,
+                    revokedPath: parsed.revokedPath
+                }],
+                activeApp: 0
+            };
+            localStorage.setItem('tessera_config', JSON.stringify(config));
+        } else {
+            config = parsed;
+        }
+
+        showApp();
         loadData();
     }
 })();
 
 function connect() {
+    const token = document.getElementById('setupToken').value.trim();
+    const repo = document.getElementById('setupRepo').value.trim();
+    const branch = document.getElementById('setupBranch').value.trim() || 'main';
+    const appName = document.getElementById('setupAppName').value.trim() || 'Default';
+    const licensesPath = document.getElementById('setupLicensesPath').value.trim();
+    const revokedPath = document.getElementById('setupRevokedPath').value.trim();
+
+    if (!token || !repo) { toast('Token and repo required', 'error'); return; }
+    if (!licensesPath || !revokedPath) { toast('License and revocation paths required', 'error'); return; }
+
     config = {
-        token: document.getElementById('setupToken').value.trim(),
-        repo: document.getElementById('setupRepo').value.trim(),
-        branch: document.getElementById('setupBranch').value.trim(),
-        licensesPath: document.getElementById('setupLicensesPath').value.trim(),
-        revokedPath: document.getElementById('setupRevokedPath').value.trim()
+        token, repo, branch,
+        apps: [{ name: appName, licensesPath, revokedPath }],
+        activeApp: 0
     };
-    if (!config.token || !config.repo) { toast('Token and repo required', 'error'); return; }
     localStorage.setItem('tessera_config', JSON.stringify(config));
+    showApp();
+    loadData();
+}
+
+function showApp() {
     document.getElementById('setupScreen').classList.add('hidden');
+    document.getElementById('appTabsContainer').classList.remove('hidden');
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('disconnectBtn').classList.remove('hidden');
-    loadData();
+    document.getElementById('settingsBtn').classList.remove('hidden');
+    renderAppTabs();
 }
 
 function disconnect() {
     localStorage.removeItem('tessera_config');
-    config = {};
+    config = { token: '', repo: '', branch: 'main', apps: [], activeApp: 0 };
     location.reload();
+}
+
+// --- App Tabs ---
+function renderAppTabs() {
+    const container = document.getElementById('appTabs');
+    container.innerHTML = '';
+
+    config.apps.forEach((app, i) => {
+        const tab = document.createElement('div');
+        tab.className = 'app-tab' + (i === config.activeApp ? ' active' : '');
+        tab.innerHTML = `
+            <span onclick="switchApp(${i})">${escHtml(app.name)}</span>
+            ${config.apps.length > 1 ? `<span class="remove-app" onclick="event.stopPropagation();removeApp(${i})" title="Remove app">&times;</span>` : ''}
+        `;
+        container.appendChild(tab);
+    });
+
+    const addBtn = document.createElement('div');
+    addBtn.className = 'app-tab-add';
+    addBtn.textContent = '+ Add App';
+    addBtn.onclick = () => showAddAppModal();
+    container.appendChild(addBtn);
+}
+
+function switchApp(index) {
+    if (index === config.activeApp) return;
+    config.activeApp = index;
+    localStorage.setItem('tessera_config', JSON.stringify(config));
+    renderAppTabs();
+    loadData();
+}
+
+function removeApp(index) {
+    if (config.apps.length <= 1) return;
+    const name = config.apps[index].name;
+    if (!confirm(`Remove "${name}" from the dashboard?`)) return;
+
+    config.apps.splice(index, 1);
+    if (config.activeApp >= config.apps.length) config.activeApp = config.apps.length - 1;
+    localStorage.setItem('tessera_config', JSON.stringify(config));
+    renderAppTabs();
+    loadData();
+}
+
+// --- Add App Modal ---
+function showAddAppModal() {
+    document.getElementById('addAppName').value = '';
+    document.getElementById('addAppLicensesPath').value = '';
+    document.getElementById('addAppRevokedPath').value = '';
+    document.getElementById('addAppModal').classList.add('active');
+}
+
+function closeAddAppModal() {
+    document.getElementById('addAppModal').classList.remove('active');
+}
+
+function confirmAddApp() {
+    const name = document.getElementById('addAppName').value.trim();
+    const licensesPath = document.getElementById('addAppLicensesPath').value.trim();
+    const revokedPath = document.getElementById('addAppRevokedPath').value.trim();
+
+    if (!name) { toast('App name required', 'error'); return; }
+    if (!licensesPath || !revokedPath) { toast('Both paths required', 'error'); return; }
+
+    config.apps.push({ name, licensesPath, revokedPath });
+    config.activeApp = config.apps.length - 1;
+    localStorage.setItem('tessera_config', JSON.stringify(config));
+
+    closeAddAppModal();
+    renderAppTabs();
+    loadData();
+    toast(`Added "${name}"`);
+}
+
+// --- Settings Modal ---
+function showSettingsModal() {
+    document.getElementById('settingsRepo').value = config.repo;
+    document.getElementById('settingsBranch').value = config.branch;
+    renderSettingsAppList();
+    document.getElementById('settingsModal').classList.add('active');
+}
+
+function renderSettingsAppList() {
+    const container = document.getElementById('settingsAppList');
+    container.innerHTML = '';
+
+    config.apps.forEach((app, i) => {
+        const div = document.createElement('div');
+        div.style.cssText = 'border:1px solid var(--glass-border);border-radius:8px;padding:12px;margin-bottom:8px;';
+        div.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <input type="text" value="${escHtml(app.name)}" data-settings-app-name="${i}" style="font-weight:600;width:60%;">
+                ${config.apps.length > 1 ? `<button class="btn btn-danger btn-sm" onclick="settingsRemoveApp(${i})">Remove</button>` : ''}
+            </div>
+            <div class="form-group" style="margin-bottom:6px;">
+                <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:2px;">Licenses path</label>
+                <input type="text" value="${escHtml(app.licensesPath)}" data-settings-app-licenses="${i}" style="width:100%;">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:2px;">Revocation path</label>
+                <input type="text" value="${escHtml(app.revokedPath)}" data-settings-app-revoked="${i}" style="width:100%;">
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function settingsAddApp() {
+    config.apps.push({ name: 'New App', licensesPath: 'licensing/licenses.json', revokedPath: 'licensing/revoked.json' });
+    renderSettingsAppList();
+}
+
+function settingsRemoveApp(index) {
+    if (config.apps.length <= 1) return;
+    config.apps.splice(index, 1);
+    if (config.activeApp >= config.apps.length) config.activeApp = config.apps.length - 1;
+    renderSettingsAppList();
+}
+
+function saveSettings() {
+    config.repo = document.getElementById('settingsRepo').value.trim();
+    config.branch = document.getElementById('settingsBranch').value.trim();
+
+    // Read app settings from the modal inputs
+    const appCount = config.apps.length;
+    for (let i = 0; i < appCount; i++) {
+        const nameInput = document.querySelector(`[data-settings-app-name="${i}"]`);
+        const licInput = document.querySelector(`[data-settings-app-licenses="${i}"]`);
+        const revInput = document.querySelector(`[data-settings-app-revoked="${i}"]`);
+        if (nameInput) config.apps[i].name = nameInput.value.trim() || 'Untitled';
+        if (licInput) config.apps[i].licensesPath = licInput.value.trim();
+        if (revInput) config.apps[i].revokedPath = revInput.value.trim();
+    }
+
+    localStorage.setItem('tessera_config', JSON.stringify(config));
+    closeModals();
+    renderAppTabs();
+    loadData();
+    toast('Settings saved');
 }
 
 // --- GitHub API ---
@@ -326,10 +579,19 @@ async function ghPut(path, content, sha, message) {
 
 // --- Data Loading ---
 async function loadData() {
+    const app = activeApp();
+    if (!app) return;
+
+    // Reset state for new app
+    licenses = { licenses: [], updated: '' };
+    revoked = { revoked: [], messages: {}, updated: '' };
+    licensesSHA = '';
+    revokedSHA = '';
+
     try {
         const [licRes, revRes] = await Promise.all([
-            ghGet(config.licensesPath),
-            ghGet(config.revokedPath)
+            ghGet(app.licensesPath),
+            ghGet(app.revokedPath)
         ]);
 
         if (licRes) {
@@ -403,15 +665,15 @@ function renderTable() {
 
         const tr = document.createElement('tr');
         const badgeClass = { active: 'badge-active', expiring: 'badge-expiring', expired: 'badge-expired', revoked: 'badge-revoked' }[status];
-        const expStr = lic.expires === 'perpetual' ? 'Perpetual' : lic.expires ? formatDate(lic.expires) + ' (' + daysUntil(lic.expires) + ')' : '—';
-        const subStatus = lic.subscription?.active ? '<span class="badge badge-active">Active</span>' : '<span style="color:var(--text-dim)">—</span>';
+        const expStr = lic.expires === 'perpetual' ? 'Perpetual' : lic.expires ? formatDate(lic.expires) + ' (' + daysUntil(lic.expires) + ')' : '\u2014';
+        const subStatus = lic.subscription?.active ? '<span class="badge badge-active">Active</span>' : '<span style="color:var(--text-dim)">\u2014</span>';
 
         tr.innerHTML = `
             <td><span class="badge ${badgeClass}">${status}</span></td>
             <td class="mono" style="cursor:pointer;" onclick="copyText('${lid}')" title="Click to copy">${lid.substring(0,8)}...</td>
             <td><span class="editable" ondblclick="editNickname(this,'${lid}')">${nick || '<span style=color:var(--text-dim)>double-click to set</span>'}</span></td>
-            <td><span class="badge badge-tier">${lic.tier || '—'}</span></td>
-            <td>${lic.issued ? formatDate(lic.issued) : '—'}</td>
+            <td><span class="badge badge-tier">${lic.tier || '\u2014'}</span></td>
+            <td>${lic.issued ? formatDate(lic.issued) : '\u2014'}</td>
             <td>${expStr}</td>
             <td>${subStatus}</td>
             <td>
@@ -433,7 +695,6 @@ function renderTimeline() {
     const end = new Date(now.getFullYear(), now.getMonth() + 12, 1);
     const range = end - start;
 
-    // Month markers
     for (let m = 0; m < 12; m++) {
         const d = new Date(now.getFullYear(), now.getMonth() + m, 1);
         const pct = ((d - start) / range) * 100;
@@ -445,7 +706,6 @@ function renderTimeline() {
         bar.appendChild(div);
     }
 
-    // License dots
     let row = 0;
     for (const lic of licenses.licenses) {
         if (lic.expires === 'perpetual' || !lic.expires) continue;
@@ -461,7 +721,7 @@ function renderTimeline() {
         dot.style.left = `calc(${pct}% - 5px)`;
         dot.style.top = `${30 + (row % 5) * 16}px`;
         dot.style.background = color;
-        dot.title = `${lic.nickname || lic.lid.substring(0,8)} — ${formatDate(lic.expires)}`;
+        dot.title = `${lic.nickname || lic.lid.substring(0,8)} \u2014 ${formatDate(lic.expires)}`;
         bar.appendChild(dot);
 
         const label = document.createElement('div');
@@ -477,6 +737,7 @@ function renderTimeline() {
 
 // --- Actions ---
 function showGenerateModal() {
+    if (!activeApp()) { toast('Connect and add an app first', 'error'); return; }
     document.getElementById('genLid').value = '';
     document.getElementById('genNickname').value = '';
     document.getElementById('generateModal').classList.add('active');
@@ -493,6 +754,9 @@ function closeModals() {
 }
 
 async function addLicense() {
+    const app = activeApp();
+    if (!app) return;
+
     const lid = document.getElementById('genLid').value.trim() || crypto.randomUUID();
     const tier = document.getElementById('genTier').value;
     const durationDays = parseInt(document.getElementById('genDuration').value);
@@ -520,17 +784,20 @@ async function addLicense() {
     licenses.updated = now.toISOString();
 
     try {
-        const result = await ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
+        const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
         licensesSHA = result.content.sha;
         render();
         closeModals();
-        toast('License added (note: this is metadata only — generate the signed key via CLI or GitHub Action)');
+        toast('License added (note: this is metadata only \u2014 generate the signed key via CLI or GitHub Action)');
     } catch (e) {
         toast('Failed: ' + e.message, 'error');
     }
 }
 
 async function confirmRevoke() {
+    const app = activeApp();
+    if (!app) return;
+
     const lid = document.getElementById('revokeLid').value;
     const message = document.getElementById('revokeMessage').value.trim();
 
@@ -538,15 +805,14 @@ async function confirmRevoke() {
     if (message) revoked.messages[lid] = message;
     revoked.updated = new Date().toISOString();
 
-    // Also mark in licenses
     const lic = licenses.licenses.find(l => l.lid === lid);
     if (lic) lic.revoked = true;
     licenses.updated = new Date().toISOString();
 
     try {
         await Promise.all([
-            ghPut(config.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
-            ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
+            ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
+            ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
         ]);
         render();
         closeModals();
@@ -557,6 +823,9 @@ async function confirmRevoke() {
 }
 
 async function unrevoke(lid) {
+    const app = activeApp();
+    if (!app) return;
+
     revoked.revoked = revoked.revoked.filter(id => id !== lid);
     delete revoked.messages[lid];
     revoked.updated = new Date().toISOString();
@@ -567,8 +836,8 @@ async function unrevoke(lid) {
 
     try {
         await Promise.all([
-            ghPut(config.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
-            ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
+            ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
+            ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
         ]);
         render();
         toast('License unrevoked');
@@ -578,6 +847,9 @@ async function unrevoke(lid) {
 }
 
 async function editNickname(el, lid) {
+    const app = activeApp();
+    if (!app) return;
+
     const current = licenses.licenses.find(l => l.lid === lid)?.nickname || '';
     const input = document.createElement('input');
     input.type = 'text';
@@ -594,7 +866,7 @@ async function editNickname(el, lid) {
         if (lic) lic.nickname = val;
         licenses.updated = new Date().toISOString();
         try {
-            const result = await ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Rename: ${lid.substring(0, 8)} → ${val}`);
+            const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Rename: ${lid.substring(0, 8)} \u2192 ${val}`);
             licensesSHA = result.content.sha;
             renderTable();
         } catch (e) {
@@ -609,7 +881,7 @@ async function editNickname(el, lid) {
 
 // --- Helpers ---
 function formatDate(iso) {
-    if (!iso) return '—';
+    if (!iso) return '\u2014';
     const d = new Date(iso);
     return isNaN(d) ? iso : d.toLocaleDateString('en', { year: 'numeric', month: 'short', day: 'numeric' });
 }
@@ -626,6 +898,12 @@ function daysUntil(iso) {
 function copyText(text) {
     navigator.clipboard.writeText(text);
     toast('Copied to clipboard');
+}
+
+function escHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
 }
 
 function toast(msg, type = 'success') {
