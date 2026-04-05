@@ -20,6 +20,9 @@ public enum TesseraError: LocalizedError, Sendable {
     case invalidPublicKey
     case decodingFailed
     case integrityCheckFailed
+    case activationLimitReached(maxDevices: Int)
+    case deviceNotActivated
+    case activationServerUnreachable
 
     public var errorDescription: String? {
         switch self {
@@ -45,6 +48,12 @@ public enum TesseraError: LocalizedError, Sendable {
             return "Failed to decode license data."
         case .integrityCheckFailed:
             return "Application integrity check failed."
+        case .activationLimitReached(let maxDevices):
+            return "This license has reached its device limit (\(maxDevices) device\(maxDevices == 1 ? "" : "s")). Deactivate another device first."
+        case .deviceNotActivated:
+            return "This device is not activated for this license."
+        case .activationServerUnreachable:
+            return "Unable to reach the activation server. Please check your internet connection and try again."
         }
     }
 }

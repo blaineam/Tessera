@@ -2,7 +2,7 @@
 
 **Cryptographic App Licensing for macOS**
 
-Zero infrastructure. Zero tracking. Unforgeable licenses. Stripe subscriptions.
+Unforgeable licenses. Device seat limiting. Stripe subscriptions. Zero tracking.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -13,13 +13,14 @@ Zero infrastructure. Zero tracking. Unforgeable licenses. Stripe subscriptions.
 Tessera is a complete, self-contained licensing platform for macOS apps distributed outside the Mac App Store. Fork this repo, run the setup wizard, and you have:
 
 - **Ed25519 signed license keys** — cryptographically unforgeable
+- **Device seat limiting** — restrict each license to N machines, server-enforced
 - **Hardware-anchored trials** — tamper-resistant, clock-manipulation-proof
 - **Remote revocation** — via a static JSON file on your domain (no servers)
 - **Stripe subscription billing** — automatic license delivery and renewal
 - **Management dashboard** — monitor, revoke, and nickname licenses
 - **GitHub Action CI** — generate licenses from anywhere
 - **Marketing site** — glassmorphic GitHub Pages site ready to deploy
-- **Dual MAS/Direct distribution** — single codebase, one compiler flag
+- **Dual MAS/Direct distribution** — single codebase, automatic runtime detection
 
 All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and Cloudflare Workers (free tier).
 
@@ -198,16 +199,60 @@ When a subscription renews:
 
 ## Dual Distribution (MAS + Direct)
 
-Support both Mac App Store and direct distribution from one codebase:
+Support both Mac App Store and direct distribution from one codebase — **no compiler flags needed**.
 
-1. **MAS target**: Add `-DAPPSTORE` to Swift Compiler flags
-2. **Direct target**: No flag needed
+Tessera automatically detects the distribution channel at runtime by inspecting the bundle's receipt path:
+- **macOS**: App Store receipts live at `_MASReceipt/receipt`; direct distribution uses `Resources/receipt`
+- **iOS**: App Store builds lack `embedded.mobileprovision`; TestFlight/ad-hoc builds include it
 
 ```swift
-// Automatically a no-op on App Store builds
+// Automatically a no-op on App Store builds — detected at runtime
 ContentView()
     .tesseraGateIfNeeded(tessera)
 ```
+
+---
+
+## Device Seat Limiting
+
+Restrict each license key to a maximum number of simultaneous devices:
+
+```swift
+let tessera = Tessera(configuration: .init(
+    publicKeyBase64: "YOUR_KEY",
+    revocationURL: URL(string: "https://yourdomain.com/licensing/revoked.json")!,
+    appIdentifier: "com.yourcompany.yourapp",
+    appDisplayName: "Your App",
+    trialRegistryURL: URL(string: "https://tessera.yourname.workers.dev")!,
+    trialRegistrySecret: "YOUR_SECRET",
+    maxDevicesPerLicense: 3  // 0 = unlimited (default)
+))
+```
+
+### How it works
+
+1. On **first activation**, the app registers the device fingerprint with the Cloudflare Worker
+2. The worker checks how many devices are already activated for that license
+3. If under the limit → activation succeeds; at the limit → activation is rejected
+4. On **deactivation**, the device seat is released so another machine can use it
+5. Activation status is **cached locally** with the same offline grace period as revocation
+
+### Worker setup
+
+The activation system uses the same Cloudflare Worker as the trial registry. Add the `MAX_DEVICES` env var:
+
+```bash
+npx wrangler secret put TRIAL_SECRET        # same secret used for trials
+echo "3" | npx wrangler secret put MAX_DEVICES  # max devices per license
+npx wrangler deploy
+```
+
+### Offline behavior
+
+- **Initial activation** requires network connectivity (must register the device)
+- After activation, the app caches the status and works **offline for the grace period** (default: 30 days)
+- Re-verification happens on the same schedule as revocation checks (default: every 24 hours)
+- If the server is unreachable within the grace period, the cached activation is trusted
 
 ---
 
@@ -234,6 +279,8 @@ Open `Site/dashboard.html` in your browser. It connects to GitHub via your PAT (
 | Reset trial (delete Keychain) | Hidden file persists; any anchor = trial started |
 | Clock manipulation | Monotonic date tracking detects backwards clock |
 | Copy trial between Macs | Hardware fingerprint (IOPlatformUUID) mismatch |
+| Share license globally | Device seat limiting — server-enforced max devices per license |
+| MITM activation/trial | HMAC-authenticated requests & responses — secret never on wire |
 | MITM revocation check | HTTPS + JSON schema validation |
 
 ---
@@ -251,6 +298,9 @@ Open `Site/dashboard.html` in your browser. It connects to GitHub via your PAT (
 | `trialSalt` | String | "tessera-v1" | Salt for trial tokens |
 | `purchaseURL` | URL? | nil | Link to purchase page |
 | `appDisplayName` | String | "App" | Name in activation UI |
+| `trialRegistryURL` | URL? | nil | Cloudflare Worker URL for trials + activation |
+| `trialRegistrySecret` | String? | nil | Shared secret for Worker authentication |
+| `maxDevicesPerLicense` | Int | 0 | Max devices per license (0 = unlimited) |
 
 ---
 

@@ -1,20 +1,22 @@
 /**
- * Tessera Worker — Stripe Fulfillment + Trial Registry
+ * Tessera Worker — Stripe Fulfillment + Trial Registry + Device Activation
  *
  * A Cloudflare Worker that handles:
  * 1. Stripe webhooks → automatic license generation
  * 2. Trial registration → prevents unlimited trial resets
+ * 3. Device activation → seat limiting per license key
  *
- * The trial registry uses Cloudflare KV (free tier: 100K reads/day, 1K writes/day)
- * to store hardware fingerprint hashes. When a trial starts, the app POSTs the
- * hash here. On reinstall, the app checks before allowing a new trial. Since the
- * KV store is server-side, users can't wipe it by clearing local storage.
+ * The trial registry and activation system use Cloudflare KV
+ * (free tier: 100K reads/day, 1K writes/day) to store state server-side.
  *
  * Routes:
- *   POST /webhook         — Stripe webhook handler
- *   POST /trial/register  — Register a trial start (app calls this)
- *   POST /trial/check     — Check if a machine already had a trial
- *   GET  /health          — Health check
+ *   POST /webhook                — Stripe webhook handler
+ *   POST /trial/register         — Register a trial start (app calls this)
+ *   POST /trial/check            — Check if a machine already had a trial
+ *   POST /activation/activate    — Register a device for a license
+ *   POST /activation/deactivate  — Release a device seat
+ *   POST /activation/check       — Check if a device is still activated
+ *   GET  /health                 — Health check
  *
  * Environment variables (set in Cloudflare dashboard):
  *   STRIPE_WEBHOOK_SECRET  — Stripe webhook signing secret (whsec_...)
@@ -22,10 +24,11 @@
  *   GITHUB_TOKEN           — GitHub PAT with repo + actions scope
  *   GITHUB_REPO            — e.g. "username/repo-with-tessera"
  *   GITHUB_WORKFLOW_ID     — e.g. "tessera-generate-license.yml"
- *   TRIAL_SECRET           — Shared secret for trial API authentication
+ *   TRIAL_SECRET           — Shared secret for trial + activation API authentication
+ *   MAX_DEVICES            — Maximum devices per license (default: 3)
  *
  * KV Namespace binding:
- *   TRIAL_KV               — Cloudflare KV namespace for trial records
+ *   TRIAL_KV               — Cloudflare KV namespace for trial + activation records
  *
  * Deploy:
  *   npx wrangler deploy --name tessera
@@ -60,6 +63,19 @@ export default {
       // --- Trial Check ---
       if (url.pathname === "/trial/check" && request.method === "POST") {
         return await handleTrialCheck(request, env, corsHeaders);
+      }
+
+      // --- Device Activation ---
+      if (url.pathname === "/activation/activate" && request.method === "POST") {
+        return await handleActivationActivate(request, env, corsHeaders);
+      }
+
+      if (url.pathname === "/activation/deactivate" && request.method === "POST") {
+        return await handleActivationDeactivate(request, env, corsHeaders);
+      }
+
+      if (url.pathname === "/activation/check" && request.method === "POST") {
+        return await handleActivationCheck(request, env, corsHeaders);
       }
 
       // --- Stripe Webhook ---
@@ -233,6 +249,167 @@ function timingSafeEqual(a, b) {
     mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+// ============================================================
+// Device Activation (Seat Limiting)
+// ============================================================
+//
+// Each license can be activated on up to MAX_DEVICES machines.
+// Activation records are stored in KV under "activation:{license_id}".
+//
+// KV value format:
+// { "devices": [ { "fingerprint": "abc...", "activated_at": "2026-..." } ] }
+//
+// Uses the same HMAC authentication as the trial registry.
+
+async function handleActivationActivate(request, env, corsHeaders) {
+  const body = await request.json();
+  const { license_id, fingerprint, app_id, timestamp, request_hmac } = body;
+
+  if (!license_id || !fingerprint || !app_id || !timestamp || !request_hmac) {
+    return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
+  if (!validRequest) {
+    return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - parseInt(timestamp)) > 300) {
+    return jsonResponse({ error: "request expired" }, 400, corsHeaders);
+  }
+
+  const maxDevices = parseInt(env.MAX_DEVICES || "3");
+  const kvKey = `activation:${license_id}`;
+  const nonce = crypto.randomUUID();
+
+  // Load existing activation record
+  const existing = await env.TRIAL_KV.get(kvKey);
+  let record = existing ? JSON.parse(existing) : { devices: [] };
+
+  // Check if this device is already activated
+  const alreadyActive = record.devices.some(d => d.fingerprint === fingerprint);
+  if (alreadyActive) {
+    const action = "activate:ok";
+    const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+    return jsonResponse({
+      activated: true,
+      active: true,
+      device_count: record.devices.length,
+      max_devices: maxDevices,
+      nonce,
+      hmac: responseHMAC
+    }, 200, corsHeaders);
+  }
+
+  // Check device limit
+  if (record.devices.length >= maxDevices) {
+    const action = "activate:denied";
+    const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+    return jsonResponse({
+      activated: false,
+      active: false,
+      device_count: record.devices.length,
+      max_devices: maxDevices,
+      nonce,
+      hmac: responseHMAC
+    }, 200, corsHeaders);
+  }
+
+  // Activate this device
+  record.devices.push({
+    fingerprint,
+    activated_at: new Date().toISOString()
+  });
+  await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
+
+  const action = "activate:ok";
+  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  return jsonResponse({
+    activated: true,
+    device_count: record.devices.length,
+    max_devices: maxDevices,
+    nonce,
+    hmac: responseHMAC
+  }, 200, corsHeaders);
+}
+
+async function handleActivationDeactivate(request, env, corsHeaders) {
+  const body = await request.json();
+  const { license_id, fingerprint, app_id, timestamp, request_hmac } = body;
+
+  if (!license_id || !fingerprint || !app_id || !timestamp || !request_hmac) {
+    return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
+  if (!validRequest) {
+    return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - parseInt(timestamp)) > 300) {
+    return jsonResponse({ error: "request expired" }, 400, corsHeaders);
+  }
+
+  const kvKey = `activation:${license_id}`;
+  const nonce = crypto.randomUUID();
+
+  const existing = await env.TRIAL_KV.get(kvKey);
+  let record = existing ? JSON.parse(existing) : { devices: [] };
+
+  // Remove this device
+  record.devices = record.devices.filter(d => d.fingerprint !== fingerprint);
+  await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
+
+  const action = "deactivate:ok";
+  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  return jsonResponse({
+    deactivated: true,
+    device_count: record.devices.length,
+    nonce,
+    hmac: responseHMAC
+  }, 200, corsHeaders);
+}
+
+async function handleActivationCheck(request, env, corsHeaders) {
+  const body = await request.json();
+  const { license_id, fingerprint, app_id, timestamp, request_hmac } = body;
+
+  if (!license_id || !fingerprint || !app_id || !timestamp || !request_hmac) {
+    return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
+  if (!validRequest) {
+    return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - parseInt(timestamp)) > 300) {
+    return jsonResponse({ error: "request expired" }, 400, corsHeaders);
+  }
+
+  const maxDevices = parseInt(env.MAX_DEVICES || "3");
+  const kvKey = `activation:${license_id}`;
+  const nonce = crypto.randomUUID();
+
+  const existing = await env.TRIAL_KV.get(kvKey);
+  const record = existing ? JSON.parse(existing) : { devices: [] };
+
+  const isActive = record.devices.some(d => d.fingerprint === fingerprint);
+  const action = isActive ? "check:active" : "check:inactive";
+  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+
+  return jsonResponse({
+    active: isActive,
+    device_count: record.devices.length,
+    max_devices: maxDevices,
+    nonce,
+    hmac: responseHMAC
+  }, 200, corsHeaders);
 }
 
 // ============================================================

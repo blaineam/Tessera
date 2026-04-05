@@ -52,7 +52,7 @@ jobs:
     env:
       # Configure these for your project — or use repo variables
       PAGES_REPO: ${{ vars.TESSERA_PAGES_REPO || 'blaineam/blaineam.github.io' }}
-      DATA_PATH: ${{ vars.TESSERA_DATA_PATH || 'apps/ari-helper/licensing' }}
+      DATA_PATH: ${{ vars.TESSERA_DATA_PATH || 'licensing' }}
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4

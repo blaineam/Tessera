@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tessera — Cryptographic App Licensing for macOS</title>
-<meta name="description" content="Zero infrastructure. Zero tracking. Unforgeable licenses. Cryptographic app licensing for macOS with Ed25519 signatures.">
+<meta name="description" content="Unforgeable licenses. Device seat limiting. Zero tracking. Cryptographic app licensing for macOS with Ed25519 signatures.">
 <meta name="theme-color" content="#0a0a1a">
 
 <!-- Favicons -->
@@ -19,7 +19,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tessera.wemiller.com/">
 <meta property="og:title" content="Tessera — Cryptographic App Licensing for macOS">
-<meta property="og:description" content="Zero infrastructure. Zero tracking. Unforgeable licenses. Ed25519 signed license keys, hardware-anchored trials, Stripe subscriptions. Open source.">
+<meta property="og:description" content="Unforgeable licenses. Device seat limiting. Zero tracking. Ed25519 signed license keys, hardware-anchored trials, Stripe subscriptions. Open source.">
 <meta property="og:image" content="https://tessera.wemiller.com/og-image.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
@@ -28,7 +28,7 @@
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Tessera — Cryptographic App Licensing for macOS">
-<meta name="twitter:description" content="Zero infrastructure. Zero tracking. Unforgeable licenses. Open source, MIT licensed.">
+<meta name="twitter:description" content="Unforgeable licenses. Device seat limiting. Zero tracking. Open source, MIT licensed.">
 <meta name="twitter:image" content="https://tessera.wemiller.com/og-image.png">
 <style>
 *, *::before, *::after {
@@ -745,7 +745,7 @@ footer {
       <li><a href="#getting-started">Get Started</a></li>
       <li><a href="#comparison">Why Tessera</a></li>
       <li><a href="#pricing">Pricing</a></li>
-      <li><a href="https://github.com/blaineam/ari" class="btn btn-secondary" style="padding:0.5rem 1.2rem;font-size:0.85rem;">GitHub</a></li>
+      <li><a href="https://github.com/blaineam/Tessera" class="btn btn-secondary" style="padding:0.5rem 1.2rem;font-size:0.85rem;">GitHub</a></li>
     </ul>
   </div>
 </nav>
@@ -756,10 +756,10 @@ footer {
     <div class="hero-badge glass">&#128272; Open Source &middot; MIT License</div>
     <h1>Tessera</h1>
     <p class="tagline">Cryptographic App Licensing for macOS</p>
-    <p class="subtitle">Zero infrastructure. Zero tracking. Unforgeable licenses.</p>
+    <p class="subtitle">Unforgeable licenses. Device seat limiting. Zero tracking.</p>
     <div class="hero-buttons">
       <a href="#getting-started" class="btn btn-primary">Get Started</a>
-      <a href="https://github.com/blaineam/ari" class="btn btn-secondary">View on GitHub</a>
+      <a href="https://github.com/blaineam/Tessera" class="btn btn-secondary">View on GitHub</a>
     </div>
   </div>
 </section>
@@ -780,8 +780,8 @@ footer {
       </div>
       <div class="glass feature-card reveal">
         <span class="feature-icon">&#9729;&#65039;</span>
-        <h3>Zero Infrastructure</h3>
-        <p>Revocation via static JSON hosted anywhere. No servers to maintain, no databases to manage, no uptime to worry about.</p>
+        <h3>Minimal Infrastructure</h3>
+        <p>Runs on free-tier services you control: GitHub Actions, GitHub Pages, Cloudflare Workers. No paid servers, no vendor lock-in.</p>
       </div>
       <div class="glass feature-card reveal">
         <span class="feature-icon">&#9201;&#65039;</span>
@@ -791,7 +791,7 @@ footer {
       <div class="glass feature-card reveal">
         <span class="feature-icon">&#128373;&#65039;</span>
         <h3>No User Tracking</h3>
-        <p>Zero PII collected. No telemetry, no analytics, no phone-home. Your users' privacy is fully respected.</p>
+        <p>Zero PII collected. No telemetry, no analytics. Device activation calls your own server — no third-party data collection.</p>
       </div>
       <div class="glass feature-card reveal">
         <span class="feature-icon">&#128230;</span>
@@ -882,7 +882,7 @@ footer {
         <tbody>
           <tr>
             <td>Infrastructure</td>
-            <td class="highlight-col">None</td>
+            <td class="highlight-col">Free tier (yours)</td>
             <td>SaaS</td>
             <td>SaaS</td>
             <td>You</td>
@@ -942,22 +942,7 @@ footer {
           <li>MAS + direct distribution</li>
           <li>CLI &amp; GitHub Action</li>
         </ul>
-        <a href="https://github.com/blaineam/ari" class="btn btn-primary" style="width:100%;justify-content:center;">Get Started</a>
-      </div>
-      <div class="glass pricing-card reveal">
-        <span class="coming-soon-badge">Coming Soon</span>
-        <div class="pricing-tier">Hosted Dashboard</div>
-        <div class="pricing-price">TBD</div>
-        <p class="pricing-desc">Managed licensing infrastructure.</p>
-        <ul class="pricing-features">
-          <li>Everything in Open Source</li>
-          <li>Stripe integration</li>
-          <li>Auto-provisioning</li>
-          <li>License analytics dashboard</li>
-          <li>Team management</li>
-          <li>Priority support</li>
-        </ul>
-        <button class="btn btn-secondary" style="width:100%;justify-content:center;" disabled>Coming Soon</button>
+        <a href="https://github.com/blaineam/Tessera" class="btn btn-primary" style="width:100%;justify-content:center;">Get Started</a>
       </div>
     </div>
   </div>
@@ -968,8 +953,8 @@ footer {
   <div class="container">
     <div class="footer-content">
       <ul class="footer-links">
-        <li><a href="https://github.com/blaineam/ari">GitHub</a></li>
-        <li><a href="https://github.com/blaineam/ari#readme">Docs</a></li>
+        <li><a href="https://github.com/blaineam/Tessera">GitHub</a></li>
+        <li><a href="https://github.com/blaineam/Tessera#readme">Docs</a></li>
         <li><a href="#pricing">Dashboard</a></li>
       </ul>
       <p class="footer-copy">Built with <span class="heart">&hearts;</span> by Blaine Miller &middot; &copy; 2026 Tessera</p>
