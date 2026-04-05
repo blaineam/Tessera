@@ -61,17 +61,23 @@ public extension View {
 /// No compiler flags needed — Tessera inspects the bundle's receipt path
 /// to determine the distribution channel automatically.
 public struct TesseraBuildInfo {
-    /// Whether this app is running as a Mac App Store or iOS App Store build.
+    /// Whether this app is running as a Mac App Store, iOS App Store, or TestFlight build.
     ///
     /// Detection method:
     /// - **macOS**: App Store receipts live at `_MASReceipt/receipt` inside the bundle.
     ///   Direct distribution builds use `Resources/receipt` (or have no receipt at all).
-    /// - **iOS**: App Store builds do NOT contain `embedded.mobileprovision`.
-    ///   TestFlight and ad-hoc builds do.
+    /// - **iOS**: TestFlight builds are detected via the sandbox receipt URL
+    ///   (`appStoreReceiptURL` contains "sandboxReceipt"). App Store builds do NOT
+    ///   contain `embedded.mobileprovision`. Both are treated as valid App Store installs.
     public static var isAppStore: Bool {
         #if os(macOS)
         return Bundle.main.appStoreReceiptURL?.path.contains("_MASReceipt") == true
         #elseif os(iOS)
+        // TestFlight builds have a sandbox receipt — treat them as App Store
+        if Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" {
+            return true
+        }
+        // App Store builds lack embedded.mobileprovision; ad-hoc/dev builds have it
         return !FileManager.default.fileExists(
             atPath: Bundle.main.bundlePath + "/embedded.mobileprovision"
         )
