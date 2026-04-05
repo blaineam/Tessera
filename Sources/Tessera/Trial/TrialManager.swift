@@ -469,8 +469,13 @@ struct TrialManager {
     // MARK: - Anchor 2: Hidden File
 
     private var hiddenFilePath: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent("Library/.tessera_\(configuration.appIdentifier)")
+        #if os(macOS)
+        let base = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
+        #else
+        let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        #endif
+        return base.appendingPathComponent(".tessera_\(configuration.appIdentifier)")
     }
 
     private func loadHiddenFileToken() -> TrialToken? {

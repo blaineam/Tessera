@@ -10,6 +10,8 @@ import Foundation
 import CryptoKit
 #if os(macOS)
 import IOKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 /// Generates a hardware-bound fingerprint used to anchor trial tokens to a specific machine.
