@@ -13,12 +13,10 @@ struct TesseraGateModifier<ActivationContent: View>: ViewModifier {
     @ObservedObject var tessera: Tessera
     let customActivationView: () -> ActivationContent
     @State private var hasEvaluated = false
-    @Environment(\.scenePhase) private var scenePhase
 
     func body(content: Content) -> some View {
         Group {
             if !hasEvaluated {
-                // Show loading while initial evaluation runs
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)
@@ -37,12 +35,21 @@ struct TesseraGateModifier<ActivationContent: View>: ViewModifier {
             await tessera.evaluate()
             hasEvaluated = true
         }
-        .onChange(of: scenePhase) { newPhase in
-            if newPhase == .active {
-                Task {
-                    await tessera.recheckRevocation()
-                }
+        .onReceive(TesseraAppLifecycle.didBecomeActivePublisher) { _ in
+            Task {
+                await tessera.recheckRevocation()
             }
         }
+    }
+}
+
+/// Cross-platform app lifecycle publisher.
+enum TesseraAppLifecycle {
+    static var didBecomeActivePublisher: NotificationCenter.Publisher {
+        #if os(macOS)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        #else
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+        #endif
     }
 }
