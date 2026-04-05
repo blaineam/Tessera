@@ -245,11 +245,7 @@ input:focus, select:focus { border-color:var(--accent); }
 <!-- Generate Modal -->
 <div class="modal-overlay" id="generateModal">
     <div class="modal glass">
-        <h3>Add License</h3>
-        <div class="form-group">
-            <label>License ID</label>
-            <input type="text" id="genLid" placeholder="Auto-generated if blank">
-        </div>
+        <h3>Generate License</h3>
         <div class="form-group">
             <label>Tier</label>
             <select id="genTier"><option>personal</option><option>pro</option><option>team</option></select>
@@ -267,9 +263,15 @@ input:focus, select:focus { border-color:var(--accent); }
             <label>Nickname</label>
             <input type="text" id="genNickname" placeholder="e.g. John's MacBook">
         </div>
+        <div class="form-group">
+            <label>Customer Email</label>
+            <input type="email" id="genEmail" placeholder="customer@example.com">
+            <div class="hint" style="font-size:11px;color:var(--text-dim);margin-top:2px;">License key will be emailed if SMTP is configured in GitHub secrets</div>
+        </div>
+        <div id="genStatus" style="display:none;padding:12px;margin-top:8px;border-radius:8px;background:rgba(124,92,252,0.1);font-size:13px;color:var(--accent);text-align:center;"></div>
         <div class="actions">
             <button class="btn" onclick="closeModals()">Cancel</button>
-            <button class="btn btn-primary" onclick="addLicense()">Add License</button>
+            <button class="btn btn-primary" id="genSubmitBtn" onclick="addLicense()">Generate License</button>
         </div>
     </div>
 </div>
@@ -773,8 +775,11 @@ function renderTimeline() {
 // --- Actions ---
 function showGenerateModal() {
     if (!activeApp()) { toast('Connect and add an app first', 'error'); return; }
-    document.getElementById('genLid').value = '';
     document.getElementById('genNickname').value = '';
+    document.getElementById('genEmail').value = '';
+    document.getElementById('genStatus').style.display = 'none';
+    document.getElementById('genSubmitBtn').disabled = false;
+    document.getElementById('genSubmitBtn').textContent = 'Generate License';
     document.getElementById('generateModal').classList.add('active');
 }
 
@@ -788,7 +793,7 @@ function closeModals() {
     document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
 }
 
-// --- Ed25519 License Signing ---
+// --- Ed25519 License Signing (client-side, when private key is configured) ---
 function b64urlEncode(buf) {
     const bytes = new Uint8Array(buf);
     let binary = '';
@@ -801,15 +806,13 @@ function pemToRaw(pem) {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    // PKCS#8 Ed25519 private key is 48 bytes; the raw 32-byte seed is the last 32 bytes
     if (bytes.length === 48) return bytes.slice(16, 48);
     if (bytes.length === 32) return bytes;
-    throw new Error('Unexpected private key length: ' + bytes.length + ' bytes. Expected PKCS#8 (48) or raw (32).');
+    throw new Error('Unexpected private key length: ' + bytes.length);
 }
 
 async function importSigningKey(pem) {
     const raw = pemToRaw(pem);
-    // Web Crypto wants PKCS#8 for Ed25519 import — rebuild the wrapper
     const pkcs8Prefix = new Uint8Array([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
     const pkcs8 = new Uint8Array(48);
     pkcs8.set(pkcs8Prefix, 0);
@@ -817,73 +820,204 @@ async function importSigningKey(pem) {
     return crypto.subtle.importKey('pkcs8', pkcs8, { name: 'Ed25519' }, false, ['sign']);
 }
 
-async function signLicense(pem, payload) {
+async function signLicenseLocal(pem, payload) {
     const key = await importSigningKey(pem);
     const payloadBytes = new TextEncoder().encode(payload);
     const signature = await crypto.subtle.sign('Ed25519', key, payloadBytes);
     return 'TESS-' + b64urlEncode(payloadBytes) + '.' + b64urlEncode(signature);
 }
 
+// --- GitHub Action Dispatch (server-side signing via workflow) ---
+function setGenStatus(msg) {
+    const el = document.getElementById('genStatus');
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+
+async function dispatchWorkflow(tier, durationDays, nickname, email) {
+    const workflowFile = 'tessera-generate-license.yml';
+    const url = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/dispatches`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            ref: config.branch,
+            inputs: {
+                tier,
+                duration_days: String(durationDays),
+                features: '0',
+                nickname: nickname || '',
+                customer_email: email || ''
+            }
+        })
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Dispatch failed (${res.status}): ${body}`);
+    }
+}
+
+async function pollWorkflowRun(startedAfter) {
+    const workflowFile = 'tessera-generate-license.yml';
+    const maxAttempts = 40;  // ~2 minutes
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+
+        // Find the run that started after our dispatch
+        const listUrl = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/runs?per_page=5&branch=${config.branch}`;
+        const listRes = await fetch(listUrl, {
+            headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
+        });
+        if (!listRes.ok) continue;
+        const listData = await listRes.json();
+
+        const run = listData.workflow_runs?.find(r => new Date(r.created_at) >= startedAfter);
+        if (!run) continue;
+
+        if (run.status === 'completed') {
+            if (run.conclusion !== 'success') throw new Error(`Workflow failed: ${run.conclusion}`);
+
+            // Get the license key from the job logs / step summary
+            // The workflow writes the key to GITHUB_STEP_SUMMARY; we can get it from the jobs API
+            const jobsUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${run.id}/jobs`;
+            const jobsRes = await fetch(jobsUrl, {
+                headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
+            });
+            if (!jobsRes.ok) throw new Error('Could not fetch job details');
+            const jobsData = await jobsRes.json();
+
+            // Get the log to extract the license key
+            const logsUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${run.id}/logs`;
+            const logsRes = await fetch(logsUrl, {
+                headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' },
+                redirect: 'follow'
+            });
+
+            if (logsRes.ok) {
+                // Logs come as a zip — parse it
+                const blob = await logsRes.blob();
+                const text = await extractLogText(blob);
+                const keyMatch = text.match(/License Key:\s*(TESS-[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)/);
+                const idMatch = text.match(/License ID:\s*([0-9a-f-]{36})/);
+                if (keyMatch) {
+                    return { licenseKey: keyMatch[1], licenseId: idMatch?.[1] || '', runUrl: run.html_url };
+                }
+            }
+
+            // Fallback: return run URL so user can grab it manually
+            return { licenseKey: null, licenseId: null, runUrl: run.html_url };
+        }
+
+        setGenStatus(`Workflow running... (${i * 3}s)`);
+    }
+    throw new Error('Workflow timed out — check GitHub Actions');
+}
+
+async function extractLogText(zipBlob) {
+    // Use JSZip-free approach: the zip contains text files, search raw bytes for TESS-
+    const buf = await zipBlob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    // Simple scan for "License Key: TESS-" in the raw bytes
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    return decoder.decode(bytes);
+}
+
+// --- Add License (dual-mode: client-side or GitHub Action) ---
 async function addLicense() {
     const app = activeApp();
     if (!app) return;
 
-    const signingKeyPem = localStorage.getItem('tessera_signing_key');
-    if (!signingKeyPem) {
-        toast('No signing key configured — add your Ed25519 private key in Settings', 'error');
-        return;
-    }
-
-    const lid = document.getElementById('genLid').value.trim() || crypto.randomUUID();
     const tier = document.getElementById('genTier').value;
     const durationDays = parseInt(document.getElementById('genDuration').value);
     const nickname = document.getElementById('genNickname').value.trim();
+    const email = document.getElementById('genEmail').value.trim();
 
-    const now = Math.floor(Date.now() / 1000);
-    const exp = durationDays === 0 ? 0 : now + durationDays * 86400;
+    const btn = document.getElementById('genSubmitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
 
-    // Build the exact payload format Tessera expects (compact JSON, no spaces)
-    const payload = JSON.stringify({ lid, iat: now, exp, tier, feat: 0, v: 1 });
+    const signingKeyPem = localStorage.getItem('tessera_signing_key');
 
-    let licenseKey;
-    try {
-        licenseKey = await signLicense(signingKeyPem, payload);
-    } catch (e) {
-        toast('Signing failed: ' + e.message, 'error');
+    // --- Mode 1: Client-side signing (fast, if private key is configured) ---
+    if (signingKeyPem) {
+        try {
+            const lid = crypto.randomUUID();
+            const now = Math.floor(Date.now() / 1000);
+            const exp = durationDays === 0 ? 0 : now + durationDays * 86400;
+            const payload = JSON.stringify({ lid, iat: now, exp, tier, feat: 0, v: 1 });
+            const licenseKey = await signLicenseLocal(signingKeyPem, payload);
+
+            const nowISO = new Date().toISOString();
+            const entry = {
+                lid, tier,
+                issued: nowISO,
+                expires: durationDays === 0 ? 'perpetual' : new Date(exp * 1000).toISOString(),
+                nickname, key: licenseKey,
+                customer_email: email,
+                subscription: { active: false, interval: 'yearly', next_renewal: '' },
+                revoked: false
+            };
+
+            licenses.licenses.push(entry);
+            licenses.updated = nowISO;
+
+            const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
+            licensesSHA = result.content.sha;
+            render();
+            closeModals();
+            showKeyOutput(licenseKey, lid, tier, durationDays, email);
+        } catch (e) {
+            toast('Signing failed: ' + e.message, 'error');
+            btn.disabled = false;
+            btn.textContent = 'Generate License';
+        }
         return;
     }
 
-    // Dashboard metadata entry
-    const nowISO = new Date().toISOString();
-    const entry = {
-        lid, tier,
-        issued: nowISO,
-        expires: durationDays === 0 ? 'perpetual' : new Date(exp * 1000).toISOString(),
-        nickname,
-        key: licenseKey,
-        subscription: { active: false, interval: 'yearly', next_renewal: '' },
-        revoked: false
-    };
-
-    licenses.licenses.push(entry);
-    licenses.updated = nowISO;
-
+    // --- Mode 2: GitHub Action dispatch (uses server-side private key) ---
     try {
-        const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
-        licensesSHA = result.content.sha;
-        render();
+        setGenStatus('Dispatching GitHub Action...');
+        const startedAfter = new Date(Date.now() - 5000); // small buffer
+        await dispatchWorkflow(tier, durationDays, nickname, email);
+
+        setGenStatus('Workflow queued — waiting for completion...');
+        const result = await pollWorkflowRun(startedAfter);
+
+        // Reload license data (the workflow updated licenses.json in the pages repo)
+        await loadData();
+
         closeModals();
 
-        // Show the generated key
-        document.getElementById('keyOutputText').textContent = licenseKey;
-        document.getElementById('keyOutputMeta').innerHTML =
-            `<strong>ID:</strong> ${lid}<br>` +
-            `<strong>Tier:</strong> ${tier}<br>` +
-            `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : new Date(exp * 1000).toLocaleDateString()}`;
-        document.getElementById('keyOutputModal').classList.add('active');
+        if (result.licenseKey) {
+            showKeyOutput(result.licenseKey, result.licenseId, tier, durationDays, email);
+        } else {
+            // Couldn't extract key from logs — point user to the run
+            document.getElementById('keyOutputText').textContent = 'License key generated — check the workflow run for the key.';
+            document.getElementById('keyOutputMeta').innerHTML =
+                `<a href="${result.runUrl}" target="_blank" style="color:var(--accent);">View workflow run</a>`;
+            document.getElementById('keyOutputModal').classList.add('active');
+        }
+
+        if (email) toast(`License generated and emailed to ${email}`);
+        else toast('License generated');
     } catch (e) {
-        toast('Failed to save: ' + e.message, 'error');
+        toast('Failed: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate License';
+        document.getElementById('genStatus').style.display = 'none';
     }
+}
+
+function showKeyOutput(licenseKey, lid, tier, durationDays, email) {
+    document.getElementById('keyOutputText').textContent = licenseKey;
+    let meta = '';
+    if (lid) meta += `<strong>ID:</strong> ${lid}<br>`;
+    meta += `<strong>Tier:</strong> ${tier}<br>`;
+    meta += `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : durationDays + ' days'}<br>`;
+    if (email) meta += `<strong>Emailed to:</strong> ${email}`;
+    document.getElementById('keyOutputMeta').innerHTML = meta;
+    document.getElementById('keyOutputModal').classList.add('active');
 }
 
 async function confirmRevoke() {
