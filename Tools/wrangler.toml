@@ -1,0 +1,22 @@
+# Tessera Worker — Stripe Fulfillment + Trial Registry
+# Deploy: npx wrangler deploy
+# Docs: https://developers.cloudflare.com/workers/
+
+name = "tessera"
+main = "stripe_worker.js"
+compatibility_date = "2024-01-01"
+
+# KV namespace for trial registry (server-side, can't be wiped by users)
+# Create with: npx wrangler kv namespace create TRIAL_KV
+# Then paste the ID below.
+[[kv_namespaces]]
+binding = "TRIAL_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Set secrets via:
+#   npx wrangler secret put STRIPE_WEBHOOK_SECRET
+#   npx wrangler secret put STRIPE_SECRET_KEY
+#   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put GITHUB_REPO
+#   npx wrangler secret put GITHUB_WORKFLOW_ID
+#   npx wrangler secret put TRIAL_SECRET

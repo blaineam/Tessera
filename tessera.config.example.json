@@ -1,0 +1,61 @@
+{
+  "$schema": "https://tessera.wemiller.com/schema/config.json",
+  "_comment": "Copy this file to tessera.config.json and fill in your values.",
+
+  "app": {
+    "name": "My App",
+    "identifier": "com.example.myapp",
+    "purchase_url": "https://example.com/pricing"
+  },
+
+  "licensing": {
+    "tiers": ["personal", "pro", "team"],
+    "trial_duration_days": 14,
+    "offline_grace_period_days": 30,
+    "revocation_check_interval_hours": 24,
+    "trial_salt": "myapp-v1-2026"
+  },
+
+  "hosting": {
+    "_comment": "Where your revoked.json and licenses.json live. Use your own domain so it's portable.",
+    "revocation_url": "https://example.com/licensing/revoked.json",
+    "pages_repo": "username/username.github.io",
+    "pages_branch": "main",
+    "data_path": "licensing"
+  },
+
+  "trial_registry": {
+    "_comment": "Optional but recommended. Server-side trial tracking via Cloudflare Worker + KV.",
+    "_comment2": "Without this, trials can be reset by wiping local storage. With it, trial starts are registered server-side and cannot be reset.",
+    "enabled": false,
+    "worker_url": "https://tessera.yourname.workers.dev",
+    "trial_secret": "REPLACE_WITH_RANDOM_SECRET"
+  },
+
+  "stripe": {
+    "_comment": "Optional. Set enabled=true to activate Stripe subscription billing.",
+    "enabled": false,
+    "checkout_mode": "subscription",
+    "success_url": "https://example.com/licensing/success",
+    "cancel_url": "https://example.com/pricing",
+    "price_ids": {
+      "personal_monthly": "price_xxxxxxxxxxxx",
+      "personal_yearly": "price_xxxxxxxxxxxx",
+      "pro_monthly": "price_xxxxxxxxxxxx",
+      "pro_yearly": "price_xxxxxxxxxxxx",
+      "team_monthly": "price_xxxxxxxxxxxx",
+      "team_yearly": "price_xxxxxxxxxxxx"
+    },
+    "webhook_secret": "whsec_xxxxxxxxxxxx",
+    "license_duration_days": {
+      "monthly": 35,
+      "yearly": 370
+    }
+  },
+
+  "notifications": {
+    "_comment": "Optional. Get notified when licenses are created or revoked.",
+    "email": "",
+    "slack_webhook_url": ""
+  }
+}

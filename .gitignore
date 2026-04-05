@@ -1,0 +1,23 @@
+# Private keys — NEVER commit these
+*.pem
+Tools/keys/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Config (contains your secrets references)
+tessera.config.json
+
+# Xcode
+.build/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Cloudflare Worker
+.wrangler/
+node_modules/

@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tessera Dashboard</title>
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon-192x192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0a0a1a">
+<style>
+:root {
+    --bg: #0a0a1a;
+    --surface: rgba(255,255,255,0.04);
+    --glass: rgba(255,255,255,0.06);
+    --glass-border: rgba(255,255,255,0.1);
+    --text: #e8e8f0;
+    --text-dim: #8888aa;
+    --accent: #7c5cfc;
+    --accent2: #00d4aa;
+    --green: #00d4aa;
+    --orange: #ffaa33;
+    --red: #ff4466;
+    --blue: #5c9cfc;
+    --radius: 12px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+.glass { background: var(--glass); border: 1px solid var(--glass-border); border-radius: var(--radius); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--glass-border); background:rgba(10,10,26,0.8); backdrop-filter:blur(12px); position:sticky; top:0; z-index:100; }
+header h1 { font-size:18px; font-weight:600; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+header nav a { color:var(--text-dim); text-decoration:none; font-size:13px; margin-left:16px; transition:color .2s; }
+header nav a:hover { color:var(--text); }
+.container { max-width:1200px; margin:0 auto; padding:24px; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px; }
+.stat-card { padding:20px; text-align:center; }
+.stat-card .num { font-size:32px; font-weight:700; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.stat-card .label { font-size:12px; color:var(--text-dim); margin-top:4px; text-transform:uppercase; letter-spacing:1px; }
+.section { margin-bottom:24px; }
+.section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.section-header h2 { font-size:16px; font-weight:600; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; padding:10px 12px; color:var(--text-dim); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:1px; border-bottom:1px solid var(--glass-border); }
+td { padding:10px 12px; border-bottom:1px solid rgba(255,255,255,0.03); vertical-align:middle; }
+tr:hover td { background:rgba(255,255,255,0.02); }
+.badge { padding:2px 8px; border-radius:99px; font-size:11px; font-weight:600; display:inline-block; }
+.badge-active { background:rgba(0,212,170,0.15); color:var(--green); }
+.badge-expiring { background:rgba(255,170,51,0.15); color:var(--orange); }
+.badge-expired { background:rgba(255,68,102,0.15); color:var(--red); }
+.badge-revoked { background:rgba(255,68,102,0.25); color:var(--red); }
+.badge-tier { background:rgba(124,92,252,0.15); color:var(--accent); }
+.btn { padding:6px 14px; border-radius:8px; border:1px solid var(--glass-border); background:var(--glass); color:var(--text); cursor:pointer; font-size:12px; transition:all .2s; }
+.btn:hover { background:rgba(255,255,255,0.1); }
+.btn-primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.btn-primary:hover { background:#6b4be0; }
+.btn-danger { color:var(--red); border-color:rgba(255,68,102,0.3); }
+.btn-danger:hover { background:rgba(255,68,102,0.1); }
+.btn-sm { padding:3px 8px; font-size:11px; }
+input, select, textarea { padding:8px 12px; border-radius:8px; border:1px solid var(--glass-border); background:rgba(255,255,255,0.05); color:var(--text); font-size:13px; outline:none; transition:border-color .2s; }
+input:focus, select:focus { border-color:var(--accent); }
+.editable { cursor:pointer; padding:2px 6px; border-radius:4px; border:1px solid transparent; transition:all .2s; }
+.editable:hover { border-color:var(--glass-border); background:rgba(255,255,255,0.03); }
+.timeline { overflow-x:auto; padding:20px 0; }
+.timeline-bar { position:relative; height:120px; min-width:800px; background:rgba(255,255,255,0.02); border-radius:8px; border:1px solid var(--glass-border); }
+.timeline-month { position:absolute; top:0; height:100%; border-left:1px solid rgba(255,255,255,0.05); padding:4px 8px; font-size:10px; color:var(--text-dim); }
+.timeline-dot { position:absolute; width:10px; height:10px; border-radius:50%; cursor:pointer; transition:transform .2s; z-index:2; }
+.timeline-dot:hover { transform:scale(1.8); }
+.timeline-label { position:absolute; font-size:9px; color:var(--text-dim); white-space:nowrap; transform:translateX(-50%); }
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:200; display:none; align-items:center; justify-content:center; }
+.modal-overlay.active { display:flex; }
+.modal { padding:24px; max-width:480px; width:90%; }
+.modal h3 { margin-bottom:16px; font-size:16px; }
+.modal .form-group { margin-bottom:12px; }
+.modal .form-group label { display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px; }
+.modal .form-group input, .modal .form-group select { width:100%; }
+.modal .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+.toast { position:fixed; bottom:24px; right:24px; padding:12px 20px; border-radius:8px; font-size:13px; z-index:300; transform:translateY(100px); opacity:0; transition:all .3s; }
+.toast.show { transform:translateY(0); opacity:1; }
+.toast-success { background:rgba(0,212,170,0.9); color:#000; }
+.toast-error { background:rgba(255,68,102,0.9); color:#fff; }
+.setup-screen { display:flex; align-items:center; justify-content:center; min-height:80vh; }
+.setup-card { padding:32px; max-width:420px; width:100%; }
+.setup-card h2 { margin-bottom:8px; }
+.setup-card p { color:var(--text-dim); font-size:13px; margin-bottom:20px; }
+.setup-card .form-group { margin-bottom:14px; }
+.setup-card .form-group label { display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px; }
+.setup-card .form-group input { width:100%; }
+.mono { font-family:'SF Mono',Menlo,monospace; font-size:11px; }
+.hidden { display:none; }
+#app { opacity:0; transition:opacity .3s; }
+#app.loaded { opacity:1; }
+@media(max-width:768px) {
+    .container { padding:12px; }
+    .stats { grid-template-columns:1fr 1fr; }
+    table { font-size:12px; }
+    th, td { padding:8px 6px; }
+}
+</style>
+</head>
+<body>
+<header>
+    <h1>Tessera Dashboard</h1>
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="#" onclick="showGenerateModal()">+ New License</a>
+        <a href="#" id="disconnectBtn" onclick="disconnect()" class="hidden">Disconnect</a>
+    </nav>
+</header>
+
+<!-- Setup Screen -->
+<div id="setupScreen" class="setup-screen">
+    <div class="setup-card glass">
+        <h2>Connect to GitHub</h2>
+        <p>The dashboard reads and writes license data directly via the GitHub API. Your token is stored locally in this browser only.</p>
+        <div class="form-group">
+            <label>GitHub Personal Access Token</label>
+            <input type="password" id="setupToken" placeholder="ghp_xxxxxxxxxxxx">
+        </div>
+        <div class="form-group">
+            <label>Repository (owner/repo)</label>
+            <input type="text" id="setupRepo" value="blaineam/blaineam.github.io" placeholder="owner/repo">
+        </div>
+        <div class="form-group">
+            <label>Branch</label>
+            <input type="text" id="setupBranch" value="main" placeholder="main">
+        </div>
+        <div class="form-group">
+            <label>Licenses path</label>
+            <input type="text" id="setupLicensesPath" value="apps/ari-helper/licensing/licenses.json">
+        </div>
+        <div class="form-group">
+            <label>Revocation path</label>
+            <input type="text" id="setupRevokedPath" value="apps/ari-helper/licensing/revoked.json">
+        </div>
+        <button class="btn btn-primary" onclick="connect()" style="width:100%;margin-top:8px;">Connect</button>
+    </div>
+</div>
+
+<!-- Main App -->
+<div id="app" class="container hidden">
+    <!-- Stats -->
+    <div class="stats">
+        <div class="stat-card glass">
+            <div class="num" id="statActive">0</div>
+            <div class="label">Active</div>
+        </div>
+        <div class="stat-card glass">
+            <div class="num" id="statExpiring">0</div>
+            <div class="label">Expiring Soon</div>
+        </div>
+        <div class="stat-card glass">
+            <div class="num" id="statExpired">0</div>
+            <div class="label">Expired</div>
+        </div>
+        <div class="stat-card glass">
+            <div class="num" id="statRevoked">0</div>
+            <div class="label">Revoked</div>
+        </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Expiration Timeline</h2>
+        </div>
+        <div class="glass" style="padding:16px;">
+            <div class="timeline">
+                <div class="timeline-bar" id="timelineBar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- License Table -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Licenses</h2>
+            <div style="display:flex;gap:8px;">
+                <input type="text" id="searchInput" placeholder="Search..." style="width:200px;" oninput="renderTable()">
+                <button class="btn btn-primary" onclick="showGenerateModal()">+ New License</button>
+            </div>
+        </div>
+        <div class="glass" style="overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>License ID</th>
+                        <th>Nickname</th>
+                        <th>Tier</th>
+                        <th>Issued</th>
+                        <th>Expires</th>
+                        <th>Subscription</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="licenseTable"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Generate Modal -->
+<div class="modal-overlay" id="generateModal">
+    <div class="modal glass">
+        <h3>Add License</h3>
+        <div class="form-group">
+            <label>License ID</label>
+            <input type="text" id="genLid" placeholder="Auto-generated if blank">
+        </div>
+        <div class="form-group">
+            <label>Tier</label>
+            <select id="genTier"><option>personal</option><option>pro</option><option>team</option></select>
+        </div>
+        <div class="form-group">
+            <label>Expires</label>
+            <select id="genDuration">
+                <option value="30">30 days</option>
+                <option value="180">6 months</option>
+                <option value="365" selected>1 year</option>
+                <option value="0">Perpetual</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Nickname</label>
+            <input type="text" id="genNickname" placeholder="e.g. John's MacBook">
+        </div>
+        <div class="actions">
+            <button class="btn" onclick="closeModals()">Cancel</button>
+            <button class="btn btn-primary" onclick="addLicense()">Add License</button>
+        </div>
+    </div>
+</div>
+
+<!-- Revoke Modal -->
+<div class="modal-overlay" id="revokeModal">
+    <div class="modal glass">
+        <h3>Revoke License</h3>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px;">This will add the license to the revocation list. The app will pick this up on its next check.</p>
+        <input type="hidden" id="revokeLid">
+        <div class="form-group">
+            <label>Reason (optional, shown to user)</label>
+            <input type="text" id="revokeMessage" placeholder="e.g. Transferred to new key">
+        </div>
+        <div class="actions">
+            <button class="btn" onclick="closeModals()">Cancel</button>
+            <button class="btn btn-danger" onclick="confirmRevoke()">Revoke</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// --- State ---
+let config = {};
+let licenses = { licenses: [], updated: '' };
+let revoked = { revoked: [], messages: {}, updated: '' };
+let licensesSHA = '';
+let revokedSHA = '';
+
+// --- Init ---
+(function init() {
+    const saved = localStorage.getItem('tessera_config');
+    if (saved) {
+        config = JSON.parse(saved);
+        document.getElementById('setupScreen').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+        document.getElementById('disconnectBtn').classList.remove('hidden');
+        loadData();
+    }
+})();
+
+function connect() {
+    config = {
+        token: document.getElementById('setupToken').value.trim(),
+        repo: document.getElementById('setupRepo').value.trim(),
+        branch: document.getElementById('setupBranch').value.trim(),
+        licensesPath: document.getElementById('setupLicensesPath').value.trim(),
+        revokedPath: document.getElementById('setupRevokedPath').value.trim()
+    };
+    if (!config.token || !config.repo) { toast('Token and repo required', 'error'); return; }
+    localStorage.setItem('tessera_config', JSON.stringify(config));
+    document.getElementById('setupScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    document.getElementById('disconnectBtn').classList.remove('hidden');
+    loadData();
+}
+
+function disconnect() {
+    localStorage.removeItem('tessera_config');
+    config = {};
+    location.reload();
+}
+
+// --- GitHub API ---
+async function ghGet(path) {
+    const res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}?ref=${config.branch}`, {
+        headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
+    });
+    if (!res.ok) {
+        if (res.status === 404) return null;
+        throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+}
+
+async function ghPut(path, content, sha, message) {
+    const body = {
+        message,
+        content: btoa(unescape(encodeURIComponent(content))),
+        branch: config.branch
+    };
+    if (sha) body.sha = sha;
+    const res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}`, {
+        method: 'PUT',
+        headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`GitHub PUT ${res.status}: ${res.statusText}`);
+    return res.json();
+}
+
+// --- Data Loading ---
+async function loadData() {
+    try {
+        const [licRes, revRes] = await Promise.all([
+            ghGet(config.licensesPath),
+            ghGet(config.revokedPath)
+        ]);
+
+        if (licRes) {
+            licensesSHA = licRes.sha;
+            licenses = JSON.parse(decodeURIComponent(escape(atob(licRes.content.replace(/\n/g, '')))));
+            if (Array.isArray(licenses)) licenses = { licenses, updated: '' };
+        }
+
+        if (revRes) {
+            revokedSHA = revRes.sha;
+            revoked = JSON.parse(decodeURIComponent(escape(atob(revRes.content.replace(/\n/g, '')))));
+        }
+
+        render();
+        document.getElementById('app').classList.add('loaded');
+    } catch (e) {
+        toast('Failed to load: ' + e.message, 'error');
+    }
+}
+
+// --- Rendering ---
+function render() {
+    renderStats();
+    renderTable();
+    renderTimeline();
+}
+
+function getStatus(lic) {
+    if (lic.revoked || revoked.revoked.includes(lic.lid)) return 'revoked';
+    if (lic.expires === 'perpetual' || lic.expires === '') return 'active';
+    const exp = new Date(lic.expires);
+    if (isNaN(exp)) return 'active';
+    const now = new Date();
+    if (exp < now) return 'expired';
+    const days = (exp - now) / 86400000;
+    if (days < 30) return 'expiring';
+    return 'active';
+}
+
+function renderStats() {
+    let active = 0, expiring = 0, expired = 0, rev = 0;
+    for (const lic of licenses.licenses) {
+        const s = getStatus(lic);
+        if (s === 'active') active++;
+        else if (s === 'expiring') { expiring++; active++; }
+        else if (s === 'expired') expired++;
+        else if (s === 'revoked') rev++;
+    }
+    document.getElementById('statActive').textContent = active;
+    document.getElementById('statExpiring').textContent = expiring;
+    document.getElementById('statExpired').textContent = expired;
+    document.getElementById('statRevoked').textContent = rev;
+}
+
+function renderTable() {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const tbody = document.getElementById('licenseTable');
+    tbody.innerHTML = '';
+
+    const sorted = [...licenses.licenses].sort((a, b) => {
+        const sa = getStatus(a), sb = getStatus(b);
+        const order = { active: 0, expiring: 1, expired: 2, revoked: 3 };
+        return (order[sa] ?? 4) - (order[sb] ?? 4);
+    });
+
+    for (const lic of sorted) {
+        const status = getStatus(lic);
+        const nick = lic.nickname || '';
+        const lid = lic.lid || '';
+        if (search && !nick.toLowerCase().includes(search) && !lid.toLowerCase().includes(search) && !(lic.tier||'').toLowerCase().includes(search)) continue;
+
+        const tr = document.createElement('tr');
+        const badgeClass = { active: 'badge-active', expiring: 'badge-expiring', expired: 'badge-expired', revoked: 'badge-revoked' }[status];
+        const expStr = lic.expires === 'perpetual' ? 'Perpetual' : lic.expires ? formatDate(lic.expires) + ' (' + daysUntil(lic.expires) + ')' : '—';
+        const subStatus = lic.subscription?.active ? '<span class="badge badge-active">Active</span>' : '<span style="color:var(--text-dim)">—</span>';
+
+        tr.innerHTML = `
+            <td><span class="badge ${badgeClass}">${status}</span></td>
+            <td class="mono" style="cursor:pointer;" onclick="copyText('${lid}')" title="Click to copy">${lid.substring(0,8)}...</td>
+            <td><span class="editable" ondblclick="editNickname(this,'${lid}')">${nick || '<span style=color:var(--text-dim)>double-click to set</span>'}</span></td>
+            <td><span class="badge badge-tier">${lic.tier || '—'}</span></td>
+            <td>${lic.issued ? formatDate(lic.issued) : '—'}</td>
+            <td>${expStr}</td>
+            <td>${subStatus}</td>
+            <td>
+                ${status !== 'revoked'
+                    ? `<button class="btn btn-danger btn-sm" onclick="showRevokeModal('${lid}')">Revoke</button>`
+                    : `<button class="btn btn-sm" onclick="unrevoke('${lid}')">Unrevoke</button>`
+                }
+            </td>
+        `;
+        tbody.appendChild(tr);
+    }
+}
+
+function renderTimeline() {
+    const bar = document.getElementById('timelineBar');
+    bar.innerHTML = '';
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 12, 1);
+    const range = end - start;
+
+    // Month markers
+    for (let m = 0; m < 12; m++) {
+        const d = new Date(now.getFullYear(), now.getMonth() + m, 1);
+        const pct = ((d - start) / range) * 100;
+        const label = d.toLocaleDateString('en', { month: 'short', year: '2-digit' });
+        const div = document.createElement('div');
+        div.className = 'timeline-month';
+        div.style.left = pct + '%';
+        div.textContent = label;
+        bar.appendChild(div);
+    }
+
+    // License dots
+    let row = 0;
+    for (const lic of licenses.licenses) {
+        if (lic.expires === 'perpetual' || !lic.expires) continue;
+        const exp = new Date(lic.expires);
+        if (isNaN(exp) || exp < start || exp > end) continue;
+
+        const pct = ((exp - start) / range) * 100;
+        const status = getStatus(lic);
+        const color = { active: 'var(--green)', expiring: 'var(--orange)', expired: 'var(--red)', revoked: 'var(--red)' }[status];
+
+        const dot = document.createElement('div');
+        dot.className = 'timeline-dot';
+        dot.style.left = `calc(${pct}% - 5px)`;
+        dot.style.top = `${30 + (row % 5) * 16}px`;
+        dot.style.background = color;
+        dot.title = `${lic.nickname || lic.lid.substring(0,8)} — ${formatDate(lic.expires)}`;
+        bar.appendChild(dot);
+
+        const label = document.createElement('div');
+        label.className = 'timeline-label';
+        label.style.left = pct + '%';
+        label.style.top = `${30 + (row % 5) * 16 + 14}px`;
+        label.textContent = lic.nickname || lic.lid.substring(0, 6);
+        bar.appendChild(label);
+
+        row++;
+    }
+}
+
+// --- Actions ---
+function showGenerateModal() {
+    document.getElementById('genLid').value = '';
+    document.getElementById('genNickname').value = '';
+    document.getElementById('generateModal').classList.add('active');
+}
+
+function showRevokeModal(lid) {
+    document.getElementById('revokeLid').value = lid;
+    document.getElementById('revokeMessage').value = '';
+    document.getElementById('revokeModal').classList.add('active');
+}
+
+function closeModals() {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
+}
+
+async function addLicense() {
+    const lid = document.getElementById('genLid').value.trim() || crypto.randomUUID();
+    const tier = document.getElementById('genTier').value;
+    const durationDays = parseInt(document.getElementById('genDuration').value);
+    const nickname = document.getElementById('genNickname').value.trim();
+
+    const now = new Date();
+    let expires;
+    if (durationDays === 0) {
+        expires = 'perpetual';
+    } else {
+        const exp = new Date(now.getTime() + durationDays * 86400000);
+        expires = exp.toISOString();
+    }
+
+    const entry = {
+        lid, tier,
+        issued: now.toISOString(),
+        expires,
+        nickname,
+        subscription: { active: false, interval: 'yearly', next_renewal: '' },
+        revoked: false
+    };
+
+    licenses.licenses.push(entry);
+    licenses.updated = now.toISOString();
+
+    try {
+        const result = await ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
+        licensesSHA = result.content.sha;
+        render();
+        closeModals();
+        toast('License added (note: this is metadata only — generate the signed key via CLI or GitHub Action)');
+    } catch (e) {
+        toast('Failed: ' + e.message, 'error');
+    }
+}
+
+async function confirmRevoke() {
+    const lid = document.getElementById('revokeLid').value;
+    const message = document.getElementById('revokeMessage').value.trim();
+
+    if (!revoked.revoked.includes(lid)) revoked.revoked.push(lid);
+    if (message) revoked.messages[lid] = message;
+    revoked.updated = new Date().toISOString();
+
+    // Also mark in licenses
+    const lic = licenses.licenses.find(l => l.lid === lid);
+    if (lic) lic.revoked = true;
+    licenses.updated = new Date().toISOString();
+
+    try {
+        await Promise.all([
+            ghPut(config.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
+            ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
+        ]);
+        render();
+        closeModals();
+        toast('License revoked');
+    } catch (e) {
+        toast('Failed: ' + e.message, 'error');
+    }
+}
+
+async function unrevoke(lid) {
+    revoked.revoked = revoked.revoked.filter(id => id !== lid);
+    delete revoked.messages[lid];
+    revoked.updated = new Date().toISOString();
+
+    const lic = licenses.licenses.find(l => l.lid === lid);
+    if (lic) lic.revoked = false;
+    licenses.updated = new Date().toISOString();
+
+    try {
+        await Promise.all([
+            ghPut(config.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
+            ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
+        ]);
+        render();
+        toast('License unrevoked');
+    } catch (e) {
+        toast('Failed: ' + e.message, 'error');
+    }
+}
+
+async function editNickname(el, lid) {
+    const current = licenses.licenses.find(l => l.lid === lid)?.nickname || '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = current;
+    input.style.cssText = 'width:140px;padding:2px 6px;font-size:13px;';
+    el.innerHTML = '';
+    el.appendChild(input);
+    input.focus();
+    input.select();
+
+    const save = async () => {
+        const val = input.value.trim();
+        const lic = licenses.licenses.find(l => l.lid === lid);
+        if (lic) lic.nickname = val;
+        licenses.updated = new Date().toISOString();
+        try {
+            const result = await ghPut(config.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Rename: ${lid.substring(0, 8)} → ${val}`);
+            licensesSHA = result.content.sha;
+            renderTable();
+        } catch (e) {
+            toast('Save failed: ' + e.message, 'error');
+            renderTable();
+        }
+    };
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { renderTable(); } });
+}
+
+// --- Helpers ---
+function formatDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleDateString('en', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function daysUntil(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    const diff = Math.ceil((d - new Date()) / 86400000);
+    if (diff < 0) return `${Math.abs(diff)}d ago`;
+    if (diff === 0) return 'today';
+    return `${diff}d`;
+}
+
+function copyText(text) {
+    navigator.clipboard.writeText(text);
+    toast('Copied to clipboard');
+}
+
+function toast(msg, type = 'success') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `toast toast-${type} show`;
+    setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// Close modals on backdrop click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeModals(); });
+});
+</script>
+</body>
+</html>

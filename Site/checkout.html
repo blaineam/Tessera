@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Purchase License — Tessera</title>
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon-192x192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0a0a1a">
+<style>
+:root {
+    --bg: #0a0a1a;
+    --glass: rgba(255,255,255,0.06);
+    --glass-border: rgba(255,255,255,0.1);
+    --text: #e8e8f0;
+    --text-dim: #8888aa;
+    --accent: #7c5cfc;
+    --accent2: #00d4aa;
+    --radius: 16px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'SF Pro',system-ui,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; }
+.logo { font-size:28px; font-weight:700; background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:8px; }
+.subtitle { color:var(--text-dim); font-size:14px; margin-bottom:40px; }
+.plans { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:20px; max-width:920px; width:100%; }
+.plan { background:var(--glass); border:1px solid var(--glass-border); border-radius:var(--radius); padding:32px 24px; backdrop-filter:blur(20px); text-align:center; transition:border-color .3s,transform .2s; position:relative; }
+.plan:hover { border-color:rgba(124,92,252,0.3); transform:translateY(-2px); }
+.plan.featured { border-color:var(--accent); }
+.plan.featured::before { content:"Most Popular"; position:absolute; top:-12px; left:50%; transform:translateX(-50%); background:var(--accent); color:#fff; padding:4px 16px; border-radius:99px; font-size:11px; font-weight:600; }
+.plan h3 { font-size:20px; margin-bottom:4px; }
+.plan .price { font-size:36px; font-weight:700; margin:16px 0 4px; }
+.plan .price span { font-size:14px; font-weight:400; color:var(--text-dim); }
+.plan .period-toggle { display:flex; gap:8px; justify-content:center; margin:12px 0 20px; }
+.plan .period-toggle button { padding:4px 12px; border-radius:99px; border:1px solid var(--glass-border); background:transparent; color:var(--text-dim); font-size:12px; cursor:pointer; transition:all .2s; }
+.plan .period-toggle button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+.plan ul { list-style:none; text-align:left; margin:16px 0; }
+.plan ul li { padding:6px 0; font-size:13px; color:var(--text-dim); }
+.plan ul li::before { content:"✓ "; color:var(--accent2); font-weight:600; }
+.btn-checkout { display:block; width:100%; padding:12px; border-radius:10px; border:none; font-size:15px; font-weight:600; cursor:pointer; transition:all .2s; }
+.btn-checkout.primary { background:var(--accent); color:#fff; }
+.btn-checkout.primary:hover { background:#6b4be0; }
+.btn-checkout.secondary { background:transparent; border:1px solid var(--glass-border); color:var(--text); }
+.btn-checkout.secondary:hover { background:rgba(255,255,255,0.05); }
+.footer { margin-top:40px; color:var(--text-dim); font-size:12px; text-align:center; }
+.footer a { color:var(--accent); text-decoration:none; }
+.success-card { background:var(--glass); border:1px solid var(--accent2); border-radius:var(--radius); padding:40px; backdrop-filter:blur(20px); text-align:center; max-width:520px; display:none; }
+.success-card.show { display:block; }
+.success-card h2 { color:var(--accent2); margin-bottom:12px; }
+.license-key-box { background:rgba(0,0,0,0.3); border:1px solid var(--glass-border); border-radius:8px; padding:16px; margin:16px 0; font-family:'SF Mono',Menlo,monospace; font-size:12px; word-break:break-all; cursor:pointer; transition:border-color .2s; }
+.license-key-box:hover { border-color:var(--accent); }
+.plans-container { width:100%; max-width:920px; }
+</style>
+<!--
+  TESSERA CHECKOUT PAGE TEMPLATE
+
+  To configure for your app:
+  1. Replace STRIPE_PUBLISHABLE_KEY with your pk_live_... key
+  2. Replace the PRICE_IDS object with your Stripe Price IDs
+  3. Set metadata on each Stripe Price: tier, duration_days, features
+  4. Deploy this page to your site
+
+  The Stripe Checkout session will include metadata that the Tessera
+  webhook worker reads to generate the correct license tier/duration.
+-->
+<script src="https://js.stripe.com/v3/"></script>
+</head>
+<body>
+
+<div class="plans-container" id="plansContainer">
+    <div style="text-align:center;">
+        <div class="logo">Tessera</div>
+        <div class="subtitle">Choose your plan — license key delivered instantly after payment</div>
+    </div>
+
+    <div class="plans">
+        <!-- Personal -->
+        <div class="plan" id="plan-personal">
+            <h3>Personal</h3>
+            <div class="price" id="price-personal">$29<span>/year</span></div>
+            <div class="period-toggle">
+                <button onclick="setPeriod('personal','monthly')" id="personal-monthly">Monthly</button>
+                <button onclick="setPeriod('personal','yearly')" id="personal-yearly" class="active">Yearly</button>
+            </div>
+            <ul>
+                <li>Single machine license</li>
+                <li>All core features</li>
+                <li>1 year of updates</li>
+                <li>Email support</li>
+            </ul>
+            <button class="btn-checkout secondary" onclick="checkout('personal')">Get Personal</button>
+        </div>
+
+        <!-- Pro -->
+        <div class="plan featured" id="plan-pro">
+            <h3>Pro</h3>
+            <div class="price" id="price-pro">$79<span>/year</span></div>
+            <div class="period-toggle">
+                <button onclick="setPeriod('pro','monthly')" id="pro-monthly">Monthly</button>
+                <button onclick="setPeriod('pro','yearly')" id="pro-yearly" class="active">Yearly</button>
+            </div>
+            <ul>
+                <li>Up to 3 machines</li>
+                <li>All features unlocked</li>
+                <li>Priority support</li>
+                <li>Early access to betas</li>
+            </ul>
+            <button class="btn-checkout primary" onclick="checkout('pro')">Get Pro</button>
+        </div>
+
+        <!-- Team -->
+        <div class="plan" id="plan-team">
+            <h3>Team</h3>
+            <div class="price" id="price-team">$199<span>/year</span></div>
+            <div class="period-toggle">
+                <button onclick="setPeriod('team','monthly')" id="team-monthly">Monthly</button>
+                <button onclick="setPeriod('team','yearly')" id="team-yearly" class="active">Yearly</button>
+            </div>
+            <ul>
+                <li>Up to 10 machines</li>
+                <li>All features unlocked</li>
+                <li>Priority support</li>
+                <li>Volume license management</li>
+            </ul>
+            <button class="btn-checkout secondary" onclick="checkout('team')">Get Team</button>
+        </div>
+    </div>
+</div>
+
+<!-- Success page (shown after redirect from Stripe) -->
+<div class="success-card" id="successCard">
+    <h2>Payment Successful!</h2>
+    <p style="color:var(--text-dim);margin-bottom:16px;">Your license key is being generated and will be emailed to you shortly.</p>
+    <p style="font-size:13px;color:var(--text-dim);">Check your email for the license key. If you don't see it within a few minutes, check your spam folder.</p>
+    <div style="margin-top:24px;">
+        <a href="index.html" style="color:var(--accent);text-decoration:none;font-size:14px;">← Back to home</a>
+    </div>
+</div>
+
+<div class="footer">
+    Payments processed securely by <a href="https://stripe.com" target="_blank">Stripe</a>.
+    Powered by <a href="index.html">Tessera</a>.
+</div>
+
+<script>
+// ============================================================
+// CONFIGURE THESE FOR YOUR APP
+// ============================================================
+
+const STRIPE_PUBLISHABLE_KEY = 'pk_test_xxxxxxxxxxxx'; // Replace with your key
+
+// Map of tier+period → Stripe Price ID
+// Create these prices in your Stripe Dashboard
+const PRICE_IDS = {
+    personal_monthly: 'price_xxxxxxxxxxxx',
+    personal_yearly:  'price_xxxxxxxxxxxx',
+    pro_monthly:      'price_xxxxxxxxxxxx',
+    pro_yearly:       'price_xxxxxxxxxxxx',
+    team_monthly:     'price_xxxxxxxxxxxx',
+    team_yearly:      'price_xxxxxxxxxxxx',
+};
+
+// Display prices (update to match your Stripe prices)
+const DISPLAY_PRICES = {
+    personal_monthly: '$4/mo',   personal_yearly: '$29/year',
+    pro_monthly:      '$9/mo',   pro_yearly:      '$79/year',
+    team_monthly:     '$24/mo',  team_yearly:     '$199/year',
+};
+
+// Success/cancel URLs (update for your domain)
+const SUCCESS_URL = window.location.href.split('?')[0] + '?success=true';
+const CANCEL_URL = window.location.href.split('?')[0];
+
+// ============================================================
+
+const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
+const selectedPeriods = { personal: 'yearly', pro: 'yearly', team: 'yearly' };
+
+function setPeriod(tier, period) {
+    selectedPeriods[tier] = period;
+
+    // Update toggle buttons
+    document.getElementById(`${tier}-monthly`).classList.toggle('active', period === 'monthly');
+    document.getElementById(`${tier}-yearly`).classList.toggle('active', period === 'yearly');
+
+    // Update price display
+    const key = `${tier}_${period}`;
+    const priceText = DISPLAY_PRICES[key] || '';
+    const parts = priceText.split('/');
+    document.getElementById(`price-${tier}`).innerHTML =
+        `${parts[0]}<span>/${parts[1] || 'year'}</span>`;
+}
+
+async function checkout(tier) {
+    const period = selectedPeriods[tier];
+    const priceId = PRICE_IDS[`${tier}_${period}`];
+
+    if (!priceId || priceId.startsWith('price_xxx')) {
+        alert('Stripe is not configured yet. Replace the PRICE_IDS in checkout.html with your Stripe Price IDs.');
+        return;
+    }
+
+    const durationDays = period === 'monthly' ? 35 : 370;
+
+    try {
+        // Create a Checkout Session via Stripe.js
+        // For production, create the session server-side or via the Cloudflare Worker
+        const { error } = await stripe.redirectToCheckout({
+            lineItems: [{ price: priceId, quantity: 1 }],
+            mode: 'subscription',
+            successUrl: SUCCESS_URL,
+            cancelUrl: CANCEL_URL,
+            // Metadata flows through to the webhook
+            clientReferenceId: `tessera_${tier}_${period}`,
+        });
+
+        if (error) {
+            console.error('Stripe checkout error:', error);
+            alert(error.message);
+        }
+    } catch (err) {
+        console.error('Checkout failed:', err);
+        alert('Failed to start checkout. Please try again.');
+    }
+}
+
+// Check if returning from successful payment
+if (new URLSearchParams(window.location.search).get('success') === 'true') {
+    document.getElementById('plansContainer').style.display = 'none';
+    document.getElementById('successCard').classList.add('show');
+}
+</script>
+</body>
+</html>

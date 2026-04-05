@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tessera — Cryptographic App Licensing for macOS</title>
+<meta name="description" content="Zero infrastructure. Zero tracking. Unforgeable licenses. Cryptographic app licensing for macOS with Ed25519 signatures.">
+<meta name="theme-color" content="#0a0a1a">
+
+<!-- Favicons -->
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon-192x192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tessera.wemiller.com/">
+<meta property="og:title" content="Tessera — Cryptographic App Licensing for macOS">
+<meta property="og:description" content="Zero infrastructure. Zero tracking. Unforgeable licenses. Ed25519 signed license keys, hardware-anchored trials, Stripe subscriptions. Open source.">
+<meta property="og:image" content="https://tessera.wemiller.com/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Tessera — Cryptographic App Licensing for macOS">
+<meta name="twitter:description" content="Zero infrastructure. Zero tracking. Unforgeable licenses. Open source, MIT licensed.">
+<meta name="twitter:image" content="https://tessera.wemiller.com/og-image.png">
+<style>
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg-primary: #0a0a1a;
+  --bg-secondary: #0f0f2a;
+  --glass-bg: rgba(255, 255, 255, 0.04);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: rgba(0, 0, 0, 0.3);
+  --glass-hover-bg: rgba(255, 255, 255, 0.07);
+  --glass-hover-border: rgba(255, 255, 255, 0.14);
+  --text-primary: #f0f0f8;
+  --text-secondary: rgba(240, 240, 248, 0.65);
+  --text-tertiary: rgba(240, 240, 248, 0.4);
+  --accent-purple: #8b5cf6;
+  --accent-blue: #3b82f6;
+  --accent-cyan: #06b6d4;
+  --accent-gradient: linear-gradient(135deg, #8b5cf6, #3b82f6, #06b6d4);
+  --accent-gradient-hover: linear-gradient(135deg, #a78bfa, #60a5fa, #22d3ee);
+  --section-gap: 8rem;
+  --container-max: 1100px;
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ===== Animated Background ===== */
+.bg-gradient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.bg-gradient .orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.3;
+  animation: float 20s ease-in-out infinite;
+}
+
+.bg-gradient .orb:nth-child(1) {
+  width: 600px;
+  height: 600px;
+  background: var(--accent-purple);
+  top: -10%;
+  left: -10%;
+  animation-duration: 25s;
+}
+
+.bg-gradient .orb:nth-child(2) {
+  width: 500px;
+  height: 500px;
+  background: var(--accent-blue);
+  top: 40%;
+  right: -15%;
+  animation-duration: 30s;
+  animation-delay: -5s;
+}
+
+.bg-gradient .orb:nth-child(3) {
+  width: 400px;
+  height: 400px;
+  background: var(--accent-cyan);
+  bottom: -10%;
+  left: 30%;
+  animation-duration: 22s;
+  animation-delay: -10s;
+}
+
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(40px, -30px) scale(1.05); }
+  50% { transform: translate(-20px, 20px) scale(0.95); }
+  75% { transform: translate(30px, 40px) scale(1.02); }
+}
+
+/* ===== Container ===== */
+.container {
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+/* ===== Navigation ===== */
+nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 1rem 0;
+  transition: background 0.3s, backdrop-filter 0.3s;
+}
+
+nav.scrolled {
+  background: rgba(10, 10, 26, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+nav .container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.nav-logo {
+  font-size: 1.25rem;
+  font-weight: 700;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-decoration: none;
+}
+
+.nav-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+  align-items: center;
+}
+
+.nav-links a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+
+.nav-links a:hover {
+  color: var(--text-primary);
+}
+
+.nav-toggle {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+
+/* ===== Glass Card ===== */
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px var(--glass-shadow);
+  transition: background 0.3s, border-color 0.3s, transform 0.3s;
+}
+
+.glass:hover {
+  background: var(--glass-hover-bg);
+  border-color: var(--glass-hover-border);
+}
+
+/* ===== Sections ===== */
+section {
+  padding: var(--section-gap) 0;
+}
+
+.section-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 0.75rem;
+}
+
+.section-title {
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 1rem;
+}
+
+.section-subtitle {
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  max-width: 560px;
+  margin-bottom: 3rem;
+}
+
+.section-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ===== Reveal Animation ===== */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ===== Hero ===== */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding-top: 5rem;
+}
+
+.hero-content {
+  max-width: 720px;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 2rem;
+}
+
+.hero h1 {
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 1rem;
+}
+
+.hero .tagline {
+  font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
+}
+
+.hero .subtitle {
+  font-size: clamp(0.95rem, 2vw, 1.1rem);
+  color: var(--text-secondary);
+  margin-bottom: 2.5rem;
+}
+
+.hero-buttons {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  border: none;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 6px 28px rgba(139, 92, 246, 0.5);
+}
+
+.btn-secondary {
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.btn-secondary:hover {
+  background: var(--glass-hover-bg);
+  border-color: var(--glass-hover-border);
+}
+
+/* ===== Features Grid ===== */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+}
+
+.feature-card {
+  padding: 2rem;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+}
+
+.feature-icon {
+  font-size: 2rem;
+  margin-bottom: 1rem;
+  display: block;
+}
+
+.feature-card h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.feature-card p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* ===== How It Works ===== */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  position: relative;
+}
+
+.step-card {
+  padding: 2.5rem 2rem;
+  text-align: center;
+  position: relative;
+}
+
+.step-card:hover {
+  transform: translateY(-4px);
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent-gradient);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.2rem;
+  margin-bottom: 1.25rem;
+}
+
+.step-card h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.step-card p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+/* ===== Code Example ===== */
+.code-section .container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: center;
+}
+
+.code-text .section-label,
+.code-text .section-title,
+.code-text .section-subtitle {
+  text-align: left;
+}
+
+.code-text .section-subtitle {
+  margin-bottom: 1.5rem;
+}
+
+.code-block {
+  padding: 1.75rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+
+.code-block pre {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+  color: var(--text-secondary);
+}
+
+.code-block .keyword { color: #c084fc; }
+.code-block .type { color: #60a5fa; }
+.code-block .string { color: #34d399; }
+.code-block .comment { color: var(--text-tertiary); font-style: italic; }
+.code-block .property { color: #f9a8d4; }
+.code-block .dot { color: var(--text-tertiary); }
+
+/* ===== Comparison Table ===== */
+.comparison-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 1rem 1.25rem;
+  text-align: left;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 0.9rem;
+}
+
+.comparison-table thead th {
+  background: rgba(139, 92, 246, 0.1);
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  color: var(--text-primary);
+}
+
+.comparison-table thead th:first-child {
+  border-radius: var(--radius-md) 0 0 0;
+}
+
+.comparison-table thead th:last-child {
+  border-radius: 0 var(--radius-md) 0 0;
+}
+
+.comparison-table tbody tr:last-child td:first-child {
+  border-radius: 0 0 0 var(--radius-md);
+}
+
+.comparison-table tbody tr:last-child td:last-child {
+  border-radius: 0 0 var(--radius-md) 0;
+}
+
+.comparison-table tbody tr {
+  transition: background 0.2s;
+}
+
+.comparison-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.comparison-table tbody td {
+  color: var(--text-secondary);
+}
+
+.comparison-table tbody tr td:first-child {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.comparison-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.highlight-col {
+  background: rgba(139, 92, 246, 0.06);
+  color: var(--accent-purple) !important;
+  font-weight: 600 !important;
+}
+
+/* ===== Pricing ===== */
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.pricing-card {
+  padding: 2.5rem 2rem;
+  text-align: center;
+}
+
+.pricing-card.featured {
+  border-color: rgba(139, 92, 246, 0.3);
+  background: rgba(139, 92, 246, 0.06);
+}
+
+.pricing-tier {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-purple);
+  margin-bottom: 0.75rem;
+}
+
+.pricing-price {
+  font-size: 2.5rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+}
+
+.pricing-desc {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+}
+
+.pricing-features {
+  list-style: none;
+  text-align: left;
+  margin-bottom: 2rem;
+}
+
+.pricing-features li {
+  padding: 0.4rem 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.pricing-features li::before {
+  content: "\2713";
+  color: var(--accent-purple);
+  font-weight: 700;
+  margin-right: 0.6rem;
+}
+
+.coming-soon-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent-purple);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  margin-bottom: 0.75rem;
+}
+
+/* ===== Footer ===== */
+footer {
+  border-top: 1px solid var(--glass-border);
+  padding: 3rem 0;
+}
+
+.footer-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.footer-links {
+  display: flex;
+  gap: 1.5rem;
+  list-style: none;
+}
+
+.footer-links a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+
+.footer-links a:hover {
+  color: var(--text-primary);
+}
+
+.footer-copy {
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+.footer-copy .heart {
+  color: #ef4444;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+  :root {
+    --section-gap: 5rem;
+  }
+
+  .nav-links {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(10, 10, 26, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 2rem;
+    z-index: 99;
+  }
+
+  .nav-links.open {
+    display: flex;
+  }
+
+  .nav-links a {
+    font-size: 1.2rem;
+  }
+
+  .nav-toggle {
+    display: block;
+    z-index: 101;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .steps {
+    grid-template-columns: 1fr;
+  }
+
+  .code-section .container {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer-content {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .features-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- Animated Background -->
+<div class="bg-gradient" aria-hidden="true">
+  <div class="orb"></div>
+  <div class="orb"></div>
+  <div class="orb"></div>
+</div>
+
+<!-- Navigation -->
+<nav>
+  <div class="container">
+    <a href="#" class="nav-logo">Tessera</a>
+    <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#how-it-works">How It Works</a></li>
+      <li><a href="#getting-started">Get Started</a></li>
+      <li><a href="#comparison">Why Tessera</a></li>
+      <li><a href="#pricing">Pricing</a></li>
+      <li><a href="https://github.com/blaineam/ari" class="btn btn-secondary" style="padding:0.5rem 1.2rem;font-size:0.85rem;">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-content reveal">
+    <div class="hero-badge glass">&#128272; Open Source &middot; MIT License</div>
+    <h1>Tessera</h1>
+    <p class="tagline">Cryptographic App Licensing for macOS</p>
+    <p class="subtitle">Zero infrastructure. Zero tracking. Unforgeable licenses.</p>
+    <div class="hero-buttons">
+      <a href="#getting-started" class="btn btn-primary">Get Started</a>
+      <a href="https://github.com/blaineam/ari" class="btn btn-secondary">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section id="features">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="section-label">Features</p>
+      <h2 class="section-title">Everything you need, nothing you don't</h2>
+      <p class="section-subtitle">Tessera gives you cryptographically secure licensing without the overhead of servers, subscriptions, or user tracking.</p>
+    </div>
+    <div class="features-grid">
+      <div class="glass feature-card reveal">
+        <span class="feature-icon">&#128272;</span>
+        <h3>Ed25519 Cryptographic Signatures</h3>
+        <p>Unforgeable license keys backed by state-of-the-art elliptic curve cryptography. Impossible to crack, trivial to verify.</p>
+      </div>
+      <div class="glass feature-card reveal">
+        <span class="feature-icon">&#9729;&#65039;</span>
+        <h3>Zero Infrastructure</h3>
+        <p>Revocation via static JSON hosted anywhere. No servers to maintain, no databases to manage, no uptime to worry about.</p>
+      </div>
+      <div class="glass feature-card reveal">
+        <span class="feature-icon">&#9201;&#65039;</span>
+        <h3>Hardware-Anchored Trials</h3>
+        <p>Tamper-resistant trial periods that resist clock manipulation. Anchored to hardware identity so resets are impossible.</p>
+      </div>
+      <div class="glass feature-card reveal">
+        <span class="feature-icon">&#128373;&#65039;</span>
+        <h3>No User Tracking</h3>
+        <p>Zero PII collected. No telemetry, no analytics, no phone-home. Your users' privacy is fully respected.</p>
+      </div>
+      <div class="glass feature-card reveal">
+        <span class="feature-icon">&#128230;</span>
+        <h3>Dual Distribution</h3>
+        <p>Single codebase supports both Mac App Store and direct distribution. One integration, two channels.</p>
+      </div>
+      <div class="glass feature-card reveal">
+        <span class="feature-icon">&#128683;</span>
+        <h3>Remote Revocation</h3>
+        <p>Invalidate any license from anywhere by updating a static JSON file. No server calls, instant effect.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- How It Works -->
+<section id="how-it-works">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="section-label">How It Works</p>
+      <h2 class="section-title">Three steps to secure licensing</h2>
+      <p class="section-subtitle">From key generation to license management, Tessera keeps it simple.</p>
+    </div>
+    <div class="steps">
+      <div class="glass step-card reveal">
+        <div class="step-number">1</div>
+        <h3>Generate</h3>
+        <p>Create signed licenses with the CLI or GitHub Action. Ed25519 key pairs ensure only you can issue valid licenses.</p>
+      </div>
+      <div class="glass step-card reveal">
+        <div class="step-number">2</div>
+        <h3>Activate</h3>
+        <p>Users enter their license key. Verification happens entirely offline via Ed25519 signature validation.</p>
+      </div>
+      <div class="glass step-card reveal">
+        <div class="step-number">3</div>
+        <h3>Manage</h3>
+        <p>Monitor, revoke, and renew licenses from the dashboard. Update a static JSON to revoke instantly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Code Example -->
+<section id="getting-started" class="code-section">
+  <div class="container">
+    <div class="code-text reveal">
+      <p class="section-label">Integration</p>
+      <h2 class="section-title">Up and running in minutes</h2>
+      <p class="section-subtitle">Add Tessera to your Swift project and gate your content with a single view modifier. That's the entire integration.</p>
+    </div>
+    <div class="glass code-block reveal">
+<pre><span class="keyword">import</span> <span class="type">Tessera</span>
+
+<span class="keyword">let</span> tessera = <span class="type">Tessera</span>(configuration: <span class="dot">.</span><span class="keyword">init</span>(
+    <span class="property">publicKeyBase64</span>: <span class="string">"your-key-here"</span>,
+    <span class="property">revocationURL</span>: <span class="type">URL</span>(string: <span class="string">"https://yourdomain.com/revoked.json"</span>)!,
+    <span class="property">appIdentifier</span>: <span class="string">"com.example.app"</span>,
+    <span class="property">appDisplayName</span>: <span class="string">"My App"</span>
+))
+
+<span class="comment">// That's it. One line in SwiftUI:</span>
+<span class="type">ContentView</span>()
+    <span class="dot">.</span><span class="property">tesseraGate</span>(tessera)</pre>
+    </div>
+  </div>
+</section>
+
+<!-- Why Tessera / Comparison -->
+<section id="comparison">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="section-label">Why Tessera</p>
+      <h2 class="section-title">How Tessera compares</h2>
+      <p class="section-subtitle">See how Tessera stacks up against other licensing solutions for macOS developers.</p>
+    </div>
+    <div class="glass comparison-wrapper reveal">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th class="highlight-col">Tessera</th>
+            <th>Paddle</th>
+            <th>KeyGen</th>
+            <th>DIY</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Infrastructure</td>
+            <td class="highlight-col">None</td>
+            <td>SaaS</td>
+            <td>SaaS</td>
+            <td>You</td>
+          </tr>
+          <tr>
+            <td>Privacy</td>
+            <td class="highlight-col">Zero tracking</td>
+            <td>Analytics</td>
+            <td>Analytics</td>
+            <td>Varies</td>
+          </tr>
+          <tr>
+            <td>Cost</td>
+            <td class="highlight-col">Free</td>
+            <td>% revenue</td>
+            <td>Monthly</td>
+            <td>Dev time</td>
+          </tr>
+          <tr>
+            <td>Offline Support</td>
+            <td class="highlight-col">Full</td>
+            <td>Limited</td>
+            <td>Limited</td>
+            <td>Varies</td>
+          </tr>
+          <tr>
+            <td>Open Source</td>
+            <td class="highlight-col">Yes</td>
+            <td>No</td>
+            <td>No</td>
+            <td>&mdash;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing -->
+<section id="pricing">
+  <div class="container">
+    <div class="section-header reveal">
+      <p class="section-label">Pricing</p>
+      <h2 class="section-title">Simple, honest pricing</h2>
+      <p class="section-subtitle">Start for free. Scale when you're ready.</p>
+    </div>
+    <div class="pricing-grid">
+      <div class="glass pricing-card featured reveal">
+        <div class="pricing-tier">Open Source</div>
+        <div class="pricing-price">Free</div>
+        <p class="pricing-desc">Forever. MIT License.</p>
+        <ul class="pricing-features">
+          <li>Ed25519 license generation</li>
+          <li>Offline verification</li>
+          <li>Hardware-anchored trials</li>
+          <li>Remote revocation via JSON</li>
+          <li>MAS + direct distribution</li>
+          <li>CLI &amp; GitHub Action</li>
+        </ul>
+        <a href="https://github.com/blaineam/ari" class="btn btn-primary" style="width:100%;justify-content:center;">Get Started</a>
+      </div>
+      <div class="glass pricing-card reveal">
+        <span class="coming-soon-badge">Coming Soon</span>
+        <div class="pricing-tier">Hosted Dashboard</div>
+        <div class="pricing-price">TBD</div>
+        <p class="pricing-desc">Managed licensing infrastructure.</p>
+        <ul class="pricing-features">
+          <li>Everything in Open Source</li>
+          <li>Stripe integration</li>
+          <li>Auto-provisioning</li>
+          <li>License analytics dashboard</li>
+          <li>Team management</li>
+          <li>Priority support</li>
+        </ul>
+        <button class="btn btn-secondary" style="width:100%;justify-content:center;" disabled>Coming Soon</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div class="footer-content">
+      <ul class="footer-links">
+        <li><a href="https://github.com/blaineam/ari">GitHub</a></li>
+        <li><a href="https://github.com/blaineam/ari#readme">Docs</a></li>
+        <li><a href="#pricing">Dashboard</a></li>
+      </ul>
+      <p class="footer-copy">Built with <span class="heart">&hearts;</span> by Blaine Miller &middot; &copy; 2026 Tessera</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Navigation scroll effect
+const nav = document.querySelector('nav');
+window.addEventListener('scroll', () => {
+  nav.classList.toggle('scrolled', window.scrollY > 40);
+}, { passive: true });
+
+// Mobile menu toggle
+const toggle = document.querySelector('.nav-toggle');
+const links = document.querySelector('.nav-links');
+toggle.addEventListener('click', () => {
+  const open = links.classList.toggle('open');
+  toggle.innerHTML = open ? '&#10005;' : '&#9776;';
+});
+links.querySelectorAll('a').forEach(a => {
+  a.addEventListener('click', () => {
+    links.classList.remove('open');
+    toggle.innerHTML = '&#9776;';
+  });
+});
+
+// Intersection Observer for reveal animations
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach((entry, i) => {
+    if (entry.isIntersecting) {
+      // Stagger siblings
+      const parent = entry.target.parentElement;
+      const siblings = Array.from(parent.querySelectorAll(':scope > .reveal'));
+      const idx = siblings.indexOf(entry.target);
+      const delay = idx >= 0 ? idx * 80 : 0;
+      setTimeout(() => {
+        entry.target.classList.add('visible');
+      }, delay);
+      observer.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

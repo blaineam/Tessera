@@ -1,0 +1,232 @@
+name: "Tessera: Renew License (Subscription)"
+
+# Triggered by the Stripe webhook worker when invoice.paid fires on a renewal.
+# Generates a fresh license key with a new expiration date and delivers it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      previous_license_id:
+        description: "License ID being renewed (for tracking)"
+        required: false
+        default: ""
+        type: string
+      tier:
+        description: "License tier"
+        required: true
+        type: choice
+        options:
+          - personal
+          - pro
+          - team
+      duration_days:
+        description: "Duration in days for the new license period"
+        required: true
+        type: string
+      features:
+        description: "Feature flags (integer)"
+        required: false
+        default: "0"
+        type: string
+      nickname:
+        description: "Friendly name"
+        required: false
+        default: ""
+        type: string
+      customer_email:
+        description: "Customer email for delivery"
+        required: false
+        default: ""
+        type: string
+      stripe_subscription_id:
+        description: "Stripe subscription ID"
+        required: false
+        default: ""
+        type: string
+      stripe_customer_id:
+        description: "Stripe customer ID"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  renew-license:
+    runs-on: ubuntu-latest
+    env:
+      PAGES_REPO: ${{ vars.TESSERA_PAGES_REPO || 'blaineam/blaineam.github.io' }}
+      DATA_PATH: ${{ vars.TESSERA_DATA_PATH || 'apps/ari-helper/licensing' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: pip install -r Tools/requirements.txt
+
+      - name: Write private key
+        run: |
+          TMPKEY="$(mktemp)"
+          echo "${{ secrets.TESSERA_PRIVATE_KEY }}" > "$TMPKEY"
+          chmod 600 "$TMPKEY"
+          echo "TMPKEY=$TMPKEY" >> "$GITHUB_ENV"
+
+      - name: Generate new license key
+        id: generate
+        run: |
+          OUTPUT=$(python3 Tools/tessera_cli.py generate \
+            --private-key "$TMPKEY" \
+            --tier "${{ inputs.tier }}" \
+            --features "${{ inputs.features }}" \
+            --duration "${{ inputs.duration_days }}")
+
+          echo "$OUTPUT"
+
+          LICENSE_KEY=$(echo "$OUTPUT" | grep "^License Key:" | sed 's/^License Key: *//')
+          LICENSE_ID=$(echo "$OUTPUT" | grep "^License ID:" | sed 's/^License ID: *//')
+
+          echo "license_key=$LICENSE_KEY" >> "$GITHUB_OUTPUT"
+          echo "license_id=$LICENSE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Clone pages repo
+        run: |
+          git clone "https://x-access-token:${{ secrets.PAGES_REPO_TOKEN }}@github.com/${{ env.PAGES_REPO }}.git" /tmp/pages-repo
+
+      - name: Update licenses.json (mark old as renewed, add new)
+        run: |
+          LICENSES_FILE="/tmp/pages-repo/${{ env.DATA_PATH }}/licenses.json"
+          mkdir -p "$(dirname "$LICENSES_FILE")"
+
+          if [ ! -f "$LICENSES_FILE" ]; then
+            echo '{"licenses":[],"updated":""}' > "$LICENSES_FILE"
+          fi
+
+          python3 - "$LICENSES_FILE" <<'PYEOF'
+          import json, sys, time
+
+          licenses_file = sys.argv[1]
+          now = int(time.time())
+          duration_days = int("${{ inputs.duration_days }}")
+          prev_lid = "${{ inputs.previous_license_id }}"
+          new_lid = "${{ steps.generate.outputs.license_id }}"
+
+          with open(licenses_file, "r") as f:
+              data = json.load(f)
+          if isinstance(data, list):
+              data = {"licenses": data, "updated": ""}
+
+          # Mark previous license as renewed (not revoked — it will expire naturally)
+          if prev_lid:
+              for lic in data["licenses"]:
+                  if lic.get("lid") == prev_lid:
+                      lic["subscription"]["active"] = True
+                      lic["subscription"]["renewed_by"] = new_lid
+                      lic["subscription"]["renewed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+                      break
+
+          expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + duration_days * 86400))
+          interval = "yearly" if duration_days >= 365 else ("monthly" if duration_days <= 35 else "custom")
+
+          entry = {
+              "lid": new_lid,
+              "tier": "${{ inputs.tier }}",
+              "issued": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+              "expires": expires,
+              "nickname": "${{ inputs.nickname }}",
+              "customer_email": "${{ inputs.customer_email }}",
+              "stripe_customer_id": "${{ inputs.stripe_customer_id }}",
+              "stripe_subscription_id": "${{ inputs.stripe_subscription_id }}",
+              "subscription": {
+                  "active": True,
+                  "interval": interval,
+                  "next_renewal": expires,
+                  "renews_from": prev_lid or None,
+              },
+              "revoked": False,
+          }
+
+          data["licenses"].append(entry)
+          data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+          with open(licenses_file, "w") as f:
+              json.dump(data, f, indent=2)
+          PYEOF
+
+      - name: Commit and push
+        run: |
+          cd /tmp/pages-repo
+          git config user.name "tessera[bot]"
+          git config user.email "tessera[bot]@users.noreply.github.com"
+          git add "${{ env.DATA_PATH }}/licenses.json"
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Tessera: renew ${{ inputs.tier }} license → ${{ steps.generate.outputs.license_id }}"
+          git push
+
+      - name: Send renewal license via email
+        if: inputs.customer_email != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Your License Has Been Renewed"
+          to: ${{ inputs.customer_email }}
+          from: ${{ secrets.SMTP_FROM || 'noreply@example.com' }}
+          body: |
+            Your subscription has renewed! Here's your new license key:
+
+            ${{ steps.generate.outputs.license_key }}
+
+            Your previous license will continue to work until it expires,
+            but we recommend activating this new key for the extended period.
+
+            To activate:
+            1. Open the app
+            2. Go to Settings → License
+            3. Click "Deactivate" on the old key
+            4. Paste the new key and click "Activate License"
+
+            ---
+            Powered by Tessera
+
+      - name: Update Stripe metadata
+        if: inputs.stripe_customer_id != ''
+        run: |
+          if [ -n "${{ secrets.STRIPE_SECRET_KEY }}" ]; then
+            curl -s -X POST "https://api.stripe.com/v1/customers/${{ inputs.stripe_customer_id }}" \
+              -u "${{ secrets.STRIPE_SECRET_KEY }}:" \
+              -d "metadata[tessera_license_id]=${{ steps.generate.outputs.license_id }}" \
+              -d "metadata[tessera_renewed_at]=$(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+          fi
+
+      - name: Write summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Tessera License Renewed
+
+          | Field | Value |
+          |-------|-------|
+          | **New License ID** | \`${{ steps.generate.outputs.license_id }}\` |
+          | **Previous License** | \`${{ inputs.previous_license_id || '(first issue)' }}\` |
+          | **Tier** | ${{ inputs.tier }} |
+          | **Duration** | ${{ inputs.duration_days }} days |
+          | **Email** | ${{ inputs.customer_email || '(none)' }} |
+          | **Subscription** | ${{ inputs.stripe_subscription_id || '(manual)' }} |
+
+          ### New License Key
+          \`\`\`
+          ${{ steps.generate.outputs.license_key }}
+          \`\`\`
+          EOF
+
+      - name: Clean up
+        if: always()
+        run: |
+          if [ -n "$TMPKEY" ] && [ -f "$TMPKEY" ]; then
+            shred -u "$TMPKEY" 2>/dev/null || rm -f "$TMPKEY"
+          fi
