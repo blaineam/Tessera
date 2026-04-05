@@ -624,11 +624,23 @@ async function ghPut(path, content, sha, message) {
         branch: config.branch
     };
     if (sha) body.sha = sha;
-    const res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}`, {
+    let res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}`, {
         method: 'PUT',
         headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
+    // 409 = stale SHA — re-fetch latest and retry once
+    if (res.status === 409) {
+        const fresh = await ghGet(path);
+        if (fresh) {
+            body.sha = fresh.sha;
+            res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}`, {
+                method: 'PUT',
+                headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }
+    }
     if (!res.ok) throw new Error(`GitHub PUT ${res.status}: ${res.statusText}`);
     return res.json();
 }
@@ -881,65 +893,84 @@ async function dispatchWorkflow(tier, durationDays, nickname, email) {
 
 async function pollWorkflowRun(startedAfter) {
     const workflowFile = 'tessera-generate-license.yml';
-    const maxAttempts = 40;  // ~2 minutes
+    const maxAttempts = 60;  // ~3 minutes
+    let foundRunId = null;
+
     for (let i = 0; i < maxAttempts; i++) {
         await new Promise(r => setTimeout(r, 3000));
+        const elapsed = (i + 1) * 3;
 
-        // Find the run that started after our dispatch
-        const listUrl = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/runs?per_page=5&branch=${config.branch}`;
-        const listRes = await fetch(listUrl, {
-            headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
-        });
-        if (!listRes.ok) continue;
-        const listData = await listRes.json();
+        try {
+            if (!foundRunId) {
+                // Phase 1: Find our run — look for any run created after dispatch
+                const listUrl = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/runs?per_page=10&branch=${config.branch}`;
+                const listRes = await fetch(listUrl, {
+                    headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
+                });
+                if (!listRes.ok) { setGenStatus(`Waiting for workflow to appear... (${elapsed}s)`); continue; }
+                const listData = await listRes.json();
 
-        const run = listData.workflow_runs?.find(r => new Date(r.created_at) >= startedAfter);
-        if (!run) continue;
+                // Match by timestamp (with 30s buffer for clock skew) or grab most recent queued/in_progress
+                const run = listData.workflow_runs?.find(r => new Date(r.created_at) >= startedAfter)
+                    || listData.workflow_runs?.find(r => r.status === 'queued' || r.status === 'in_progress');
 
-        if (run.status === 'completed') {
-            if (run.conclusion !== 'success') throw new Error(`Workflow failed: ${run.conclusion}`);
-
-            // Get the license key from the job logs / step summary
-            // The workflow writes the key to GITHUB_STEP_SUMMARY; we can get it from the jobs API
-            const jobsUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${run.id}/jobs`;
-            const jobsRes = await fetch(jobsUrl, {
-                headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
-            });
-            if (!jobsRes.ok) throw new Error('Could not fetch job details');
-            const jobsData = await jobsRes.json();
-
-            // Get the log to extract the license key
-            const logsUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${run.id}/logs`;
-            const logsRes = await fetch(logsUrl, {
-                headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' },
-                redirect: 'follow'
-            });
-
-            if (logsRes.ok) {
-                // Logs come as a zip — parse it
-                const blob = await logsRes.blob();
-                const text = await extractLogText(blob);
-                const keyMatch = text.match(/License Key:\s*(TESS-[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)/);
-                const idMatch = text.match(/License ID:\s*([0-9a-f-]{36})/);
-                if (keyMatch) {
-                    return { licenseKey: keyMatch[1], licenseId: idMatch?.[1] || '', runUrl: run.html_url };
+                if (!run) { setGenStatus(`Waiting for workflow to appear... (${elapsed}s)`); continue; }
+                foundRunId = run.id;
+                setGenStatus(`Workflow started — running... (${elapsed}s)`);
+                if (run.status === 'completed') {
+                    return await extractRunResult(run);
                 }
+            } else {
+                // Phase 2: We found the run, poll its status
+                const runUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${foundRunId}`;
+                const runRes = await fetch(runUrl, {
+                    headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
+                });
+                if (!runRes.ok) { setGenStatus(`Checking workflow status... (${elapsed}s)`); continue; }
+                const run = await runRes.json();
+
+                if (run.status === 'completed') {
+                    return await extractRunResult(run);
+                }
+                setGenStatus(`Workflow running... (${elapsed}s)`);
             }
-
-            // Fallback: return run URL so user can grab it manually
-            return { licenseKey: null, licenseId: null, runUrl: run.html_url };
+        } catch (e) {
+            setGenStatus(`Polling... (${elapsed}s)`);
         }
-
-        setGenStatus(`Workflow running... (${i * 3}s)`);
     }
     throw new Error('Workflow timed out — check GitHub Actions');
 }
 
+async function extractRunResult(run) {
+    if (run.conclusion !== 'success') throw new Error(`Workflow failed: ${run.conclusion}`);
+
+    // Try to extract the license key from logs
+    try {
+        const logsUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${run.id}/logs`;
+        const logsRes = await fetch(logsUrl, {
+            headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' },
+            redirect: 'follow'
+        });
+
+        if (logsRes.ok) {
+            const blob = await logsRes.blob();
+            const text = await extractLogText(blob);
+            const keyMatch = text.match(/License Key:\s*(TESS-[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)/);
+            const idMatch = text.match(/License ID:\s*([0-9a-f-]{36})/);
+            if (keyMatch) {
+                return { licenseKey: keyMatch[1], licenseId: idMatch?.[1] || '', runUrl: run.html_url };
+            }
+        }
+    } catch (e) { /* fall through to fallback */ }
+
+    return { licenseKey: null, licenseId: null, runUrl: run.html_url };
+}
+
 async function extractLogText(zipBlob) {
-    // Use JSZip-free approach: the zip contains text files, search raw bytes for TESS-
     const buf = await zipBlob.arrayBuffer();
     const bytes = new Uint8Array(buf);
-    // Simple scan for "License Key: TESS-" in the raw bytes
+    // Scan raw zip bytes — log text is often stored uncompressed or lightly compressed.
+    // For compressed entries, the TESS- string may still appear in the raw stream.
     const decoder = new TextDecoder('utf-8', { fatal: false });
     return decoder.decode(bytes);
 }
@@ -1049,15 +1080,18 @@ async function confirmRevoke() {
     const lid = document.getElementById('revokeLid').value;
     const message = document.getElementById('revokeMessage').value.trim();
 
-    if (!revoked.revoked.includes(lid)) revoked.revoked.push(lid);
-    if (message) revoked.messages[lid] = message;
-    revoked.updated = new Date().toISOString();
-
-    const lic = licenses.licenses.find(l => l.lid === lid);
-    if (lic) lic.revoked = true;
-    licenses.updated = new Date().toISOString();
-
     try {
+        // Re-fetch latest data to avoid stale SHA conflicts
+        await loadData();
+
+        if (!revoked.revoked.includes(lid)) revoked.revoked.push(lid);
+        if (message) revoked.messages[lid] = message;
+        revoked.updated = new Date().toISOString();
+
+        const lic = licenses.licenses.find(l => l.lid === lid);
+        if (lic) lic.revoked = true;
+        licenses.updated = new Date().toISOString();
+
         await Promise.all([
             ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
             ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
@@ -1074,15 +1108,17 @@ async function unrevoke(lid) {
     const app = activeApp();
     if (!app) return;
 
-    revoked.revoked = revoked.revoked.filter(id => id !== lid);
-    delete revoked.messages[lid];
-    revoked.updated = new Date().toISOString();
-
-    const lic = licenses.licenses.find(l => l.lid === lid);
-    if (lic) lic.revoked = false;
-    licenses.updated = new Date().toISOString();
-
     try {
+        await loadData();
+
+        revoked.revoked = revoked.revoked.filter(id => id !== lid);
+        delete revoked.messages[lid];
+        revoked.updated = new Date().toISOString();
+
+        const lic = licenses.licenses.find(l => l.lid === lid);
+        if (lic) lic.revoked = false;
+        licenses.updated = new Date().toISOString();
+
         await Promise.all([
             ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
             ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
