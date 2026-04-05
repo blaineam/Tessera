@@ -70,6 +70,10 @@ public struct TesseraBuildInfo {
     ///   (`appStoreReceiptURL` contains "sandboxReceipt"). App Store builds do NOT
     ///   contain `embedded.mobileprovision`. Both are treated as valid App Store installs.
     public static var isAppStore: Bool {
+        // Simulator is never App Store
+        #if targetEnvironment(simulator)
+        return false
+        #else
         #if os(macOS)
         guard let receiptURL = Bundle.main.appStoreReceiptURL else { return false }
         // TestFlight on macOS uses a sandbox receipt — treat as App Store
@@ -81,16 +85,15 @@ public struct TesseraBuildInfo {
         return receiptURL.path.contains("_MASReceipt")
             && FileManager.default.fileExists(atPath: receiptURL.path)
         #elseif os(iOS)
-        // TestFlight builds have a sandbox receipt — treat them as App Store
-        if Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" {
-            return true
+        // Xcode dev/ad-hoc builds embed a provisioning profile; App Store & TestFlight do not.
+        if Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") != nil {
+            return false
         }
-        // App Store builds lack embedded.mobileprovision; ad-hoc/dev builds have it
-        return !FileManager.default.fileExists(
-            atPath: Bundle.main.bundlePath + "/embedded.mobileprovision"
-        )
+        // No provisioning profile → App Store or TestFlight (both treated as App Store)
+        return true
         #else
         return false
+        #endif
         #endif
     }
 }
