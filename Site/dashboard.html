@@ -1092,10 +1092,12 @@ async function confirmRevoke() {
         if (lic) lic.revoked = true;
         licenses.updated = new Date().toISOString();
 
-        await Promise.all([
-            ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
-            ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
-        ]);
+        // Sequential to avoid parallel SHA conflicts
+        const revResult = await ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`);
+        revokedSHA = revResult.content.sha;
+        const licResult = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`);
+        licensesSHA = licResult.content.sha;
+
         render();
         closeModals();
         toast('License revoked');
@@ -1119,10 +1121,11 @@ async function unrevoke(lid) {
         if (lic) lic.revoked = false;
         licenses.updated = new Date().toISOString();
 
-        await Promise.all([
-            ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { revokedSHA = r.content.sha; }),
-            ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`).then(r => { licensesSHA = r.content.sha; })
-        ]);
+        const revResult = await ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`);
+        revokedSHA = revResult.content.sha;
+        const licResult = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`);
+        licensesSHA = licResult.content.sha;
+
         render();
         toast('License unrevoked');
     } catch (e) {
