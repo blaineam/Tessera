@@ -213,11 +213,12 @@ public final class Tessera: ObservableObject {
     }
 
     /// Force a fresh revocation check (e.g. when the app comes to foreground).
+    /// Always bypasses the cache to get the latest revocation list.
     public func recheckRevocation() async {
         guard let license = license,
               case .licensed = state else { return }
 
-        let revocation = await revocationChecker.checkRevocation(licenseID: license.lid)
+        let revocation = await revocationChecker.checkRevocation(licenseID: license.lid, forceRefresh: true)
         if revocation.isRevoked {
             state = .revoked(license, message: revocation.message)
         }
