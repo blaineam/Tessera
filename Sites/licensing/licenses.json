@@ -1,0 +1,20 @@
+{
+  "licenses": [
+    {
+      "lid": "5fdef1e5-3c4e-4799-855f-00487f3b5fd7",
+      "tier": "pro",
+      "issued": "2026-04-05T11:37:54Z",
+      "expires": "2027-04-05T11:37:54Z",
+      "nickname": "",
+      "customer_email": "redacted@example.com",
+      "stripe_customer_id": "",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": "2027-04-05T11:37:54Z"
+      },
+      "revoked": false
+    }
+  ],
+  "updated": "2026-04-05T11:37:54Z"
+}
