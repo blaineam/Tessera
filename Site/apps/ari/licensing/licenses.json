@@ -68,7 +68,22 @@
         "next_renewal": "2026-05-05T12:18:01Z"
       },
       "revoked": true
+    },
+    {
+      "lid": "478c7bae-adaf-45e4-8f51-69b534e16e08",
+      "tier": "personal",
+      "issued": "2026-04-05T12:48:34Z",
+      "expires": "2027-04-05T12:48:34Z",
+      "nickname": "Blaine",
+      "customer_email": "blaine@wemiller.com",
+      "stripe_customer_id": "",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": "2027-04-05T12:48:34Z"
+      },
+      "revoked": false
     }
   ],
-  "updated": "2026-04-05T12:21:57.347Z"
+  "updated": "2026-04-05T12:48:34Z"
 }
