@@ -1,4 +1,18 @@
 {
-  "licenses": [],
-  "updated": "2026-04-05T00:00:00Z"
+  "licenses": [
+    {
+      "lid": "9418e4a0-b48b-4c59-a154-767f39c9f773",
+      "tier": "pro",
+      "issued": "2026-04-05T09:53:18.634Z",
+      "expires": "2027-04-05T09:53:18.634Z",
+      "nickname": "Blaine",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": ""
+      },
+      "revoked": false
+    }
+  ],
+  "updated": "2026-04-05T09:53:18.634Z"
 }
