@@ -38,7 +38,22 @@
         "next_renewal": ""
       },
       "revoked": false
+    },
+    {
+      "lid": "1e42c370-09e0-4055-b4b5-90b1bcd39d45",
+      "tier": "pro",
+      "issued": "2026-04-05T12:16:59Z",
+      "expires": "2027-04-05T12:16:59Z",
+      "nickname": "BMiller",
+      "customer_email": "redacted@example.com",
+      "stripe_customer_id": "",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": "2027-04-05T12:16:59Z"
+      },
+      "revoked": false
     }
   ],
-  "updated": "2026-04-05T11:29:59.900Z"
+  "updated": "2026-04-05T12:16:59Z"
 }
