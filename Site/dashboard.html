@@ -104,6 +104,7 @@ input:focus, select:focus { border-color:var(--accent); }
 .setup-card .form-group .hint { font-size:11px; color:var(--text-dim); margin-top:2px; }
 .setup-card hr { border:none; border-top:1px solid var(--glass-border); margin:20px 0; }
 .mono { font-family:'SF Mono',Menlo,monospace; font-size:11px; }
+.key-output { background:rgba(0,0,0,0.3); border:1px solid var(--glass-border); border-radius:8px; padding:12px; font-family:'SF Mono',Menlo,monospace; font-size:11px; word-break:break-all; line-height:1.6; user-select:all; margin:12px 0; max-height:120px; overflow-y:auto; }
 .hidden { display:none; }
 #app { opacity:0; transition:opacity .3s; }
 #app.loaded { opacity:1; }
@@ -161,6 +162,13 @@ input:focus, select:focus { border-color:var(--accent); }
             <label>Revocation path</label>
             <input type="text" id="setupRevokedPath" value="licensing/revoked.json" placeholder="licensing/my-app/revoked.json">
             <div class="hint">Path to revoked.json in the repo above</div>
+        </div>
+        <hr>
+        <p style="color:var(--text);font-weight:600;margin-bottom:12px;">License Signing (optional)</p>
+        <div class="form-group">
+            <label>Ed25519 Private Key (PEM)</label>
+            <textarea id="setupSigningKey" rows="3" style="width:100%;font-family:'SF Mono',Menlo,monospace;font-size:11px;" placeholder="-----BEGIN PRIVATE KEY-----&#10;MC4CAQAwBQYDK2VwBCIEI...&#10;-----END PRIVATE KEY-----"></textarea>
+            <div class="hint">Paste your private key to generate signed licenses from the dashboard. Stored locally only — never sent anywhere.</div>
         </div>
         <button class="btn btn-primary" onclick="connect()" style="width:100%;margin-top:8px;">Connect</button>
     </div>
@@ -295,6 +303,11 @@ input:focus, select:focus { border-color:var(--accent); }
             <label>Branch</label>
             <input type="text" id="settingsBranch" style="width:100%;">
         </div>
+        <div class="form-group">
+            <label>Ed25519 Private Key (PEM)</label>
+            <textarea id="settingsSigningKey" rows="3" style="width:100%;font-family:'SF Mono',Menlo,monospace;font-size:11px;" placeholder="Paste to enable license generation from dashboard"></textarea>
+            <div class="hint" style="font-size:11px;color:var(--text-dim);margin-top:2px;">Stored locally only. Leave blank to disable dashboard signing.</div>
+        </div>
         <hr style="border:none;border-top:1px solid var(--glass-border);margin:16px 0;">
         <p style="font-weight:600;font-size:14px;margin-bottom:12px;">Apps</p>
         <div id="settingsAppList"></div>
@@ -325,6 +338,20 @@ input:focus, select:focus { border-color:var(--accent); }
         <div class="actions">
             <button class="btn" onclick="closeAddAppModal()">Cancel</button>
             <button class="btn btn-primary" onclick="confirmAddApp()">Add</button>
+        </div>
+    </div>
+</div>
+
+<!-- License Key Output Modal -->
+<div class="modal-overlay" id="keyOutputModal">
+    <div class="modal glass" style="max-width:560px;">
+        <h3>License Generated</h3>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:8px;">Copy this key and send it to the customer. It will not be shown again.</p>
+        <div class="key-output" id="keyOutputText"></div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;" id="keyOutputMeta"></div>
+        <div class="actions">
+            <button class="btn btn-primary" onclick="copyText(document.getElementById('keyOutputText').textContent);toast('License key copied')">Copy Key</button>
+            <button class="btn" onclick="closeModals()">Done</button>
         </div>
     </div>
 </div>
@@ -381,6 +408,7 @@ function connect() {
     const appName = document.getElementById('setupAppName').value.trim() || 'Default';
     const licensesPath = document.getElementById('setupLicensesPath').value.trim();
     const revokedPath = document.getElementById('setupRevokedPath').value.trim();
+    const signingKey = document.getElementById('setupSigningKey').value.trim();
 
     if (!token || !repo) { toast('Token and repo required', 'error'); return; }
     if (!licensesPath || !revokedPath) { toast('License and revocation paths required', 'error'); return; }
@@ -391,6 +419,7 @@ function connect() {
         activeApp: 0
     };
     localStorage.setItem('tessera_config', JSON.stringify(config));
+    if (signingKey) localStorage.setItem('tessera_signing_key', signingKey);
     showApp();
     loadData();
 }
@@ -406,6 +435,7 @@ function showApp() {
 
 function disconnect() {
     localStorage.removeItem('tessera_config');
+    localStorage.removeItem('tessera_signing_key');
     config = { token: '', repo: '', branch: 'main', apps: [], activeApp: 0 };
     location.reload();
 }
@@ -486,6 +516,7 @@ function confirmAddApp() {
 function showSettingsModal() {
     document.getElementById('settingsRepo').value = config.repo;
     document.getElementById('settingsBranch').value = config.branch;
+    document.getElementById('settingsSigningKey').value = localStorage.getItem('tessera_signing_key') || '';
     renderSettingsAppList();
     document.getElementById('settingsModal').classList.add('active');
 }
@@ -541,6 +572,10 @@ function saveSettings() {
         if (licInput) config.apps[i].licensesPath = licInput.value.trim();
         if (revInput) config.apps[i].revokedPath = revInput.value.trim();
     }
+
+    const signingKey = document.getElementById('settingsSigningKey').value.trim();
+    if (signingKey) localStorage.setItem('tessera_signing_key', signingKey);
+    else localStorage.removeItem('tessera_signing_key');
 
     localStorage.setItem('tessera_config', JSON.stringify(config));
     closeModals();
@@ -753,44 +788,101 @@ function closeModals() {
     document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
 }
 
+// --- Ed25519 License Signing ---
+function b64urlEncode(buf) {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function pemToRaw(pem) {
+    const b64 = pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    // PKCS#8 Ed25519 private key is 48 bytes; the raw 32-byte seed is the last 32 bytes
+    if (bytes.length === 48) return bytes.slice(16, 48);
+    if (bytes.length === 32) return bytes;
+    throw new Error('Unexpected private key length: ' + bytes.length + ' bytes. Expected PKCS#8 (48) or raw (32).');
+}
+
+async function importSigningKey(pem) {
+    const raw = pemToRaw(pem);
+    // Web Crypto wants PKCS#8 for Ed25519 import — rebuild the wrapper
+    const pkcs8Prefix = new Uint8Array([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
+    const pkcs8 = new Uint8Array(48);
+    pkcs8.set(pkcs8Prefix, 0);
+    pkcs8.set(raw, 16);
+    return crypto.subtle.importKey('pkcs8', pkcs8, { name: 'Ed25519' }, false, ['sign']);
+}
+
+async function signLicense(pem, payload) {
+    const key = await importSigningKey(pem);
+    const payloadBytes = new TextEncoder().encode(payload);
+    const signature = await crypto.subtle.sign('Ed25519', key, payloadBytes);
+    return 'TESS-' + b64urlEncode(payloadBytes) + '.' + b64urlEncode(signature);
+}
+
 async function addLicense() {
     const app = activeApp();
     if (!app) return;
+
+    const signingKeyPem = localStorage.getItem('tessera_signing_key');
+    if (!signingKeyPem) {
+        toast('No signing key configured — add your Ed25519 private key in Settings', 'error');
+        return;
+    }
 
     const lid = document.getElementById('genLid').value.trim() || crypto.randomUUID();
     const tier = document.getElementById('genTier').value;
     const durationDays = parseInt(document.getElementById('genDuration').value);
     const nickname = document.getElementById('genNickname').value.trim();
 
-    const now = new Date();
-    let expires;
-    if (durationDays === 0) {
-        expires = 'perpetual';
-    } else {
-        const exp = new Date(now.getTime() + durationDays * 86400000);
-        expires = exp.toISOString();
+    const now = Math.floor(Date.now() / 1000);
+    const exp = durationDays === 0 ? 0 : now + durationDays * 86400;
+
+    // Build the exact payload format Tessera expects (compact JSON, no spaces)
+    const payload = JSON.stringify({ lid, iat: now, exp, tier, feat: 0, v: 1 });
+
+    let licenseKey;
+    try {
+        licenseKey = await signLicense(signingKeyPem, payload);
+    } catch (e) {
+        toast('Signing failed: ' + e.message, 'error');
+        return;
     }
 
+    // Dashboard metadata entry
+    const nowISO = new Date().toISOString();
     const entry = {
         lid, tier,
-        issued: now.toISOString(),
-        expires,
+        issued: nowISO,
+        expires: durationDays === 0 ? 'perpetual' : new Date(exp * 1000).toISOString(),
         nickname,
+        key: licenseKey,
         subscription: { active: false, interval: 'yearly', next_renewal: '' },
         revoked: false
     };
 
     licenses.licenses.push(entry);
-    licenses.updated = now.toISOString();
+    licenses.updated = nowISO;
 
     try {
         const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
         licensesSHA = result.content.sha;
         render();
         closeModals();
-        toast('License added (note: this is metadata only \u2014 generate the signed key via CLI or GitHub Action)');
+
+        // Show the generated key
+        document.getElementById('keyOutputText').textContent = licenseKey;
+        document.getElementById('keyOutputMeta').innerHTML =
+            `<strong>ID:</strong> ${lid}<br>` +
+            `<strong>Tier:</strong> ${tier}<br>` +
+            `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : new Date(exp * 1000).toLocaleDateString()}`;
+        document.getElementById('keyOutputModal').classList.add('active');
     } catch (e) {
-        toast('Failed: ' + e.message, 'error');
+        toast('Failed to save: ' + e.message, 'error');
     }
 }
 

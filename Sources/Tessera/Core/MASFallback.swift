@@ -71,7 +71,12 @@ public struct TesseraBuildInfo {
     ///   contain `embedded.mobileprovision`. Both are treated as valid App Store installs.
     public static var isAppStore: Bool {
         #if os(macOS)
-        return Bundle.main.appStoreReceiptURL?.path.contains("_MASReceipt") == true
+        // The receipt URL path always contains "_MASReceipt" on macOS, even for
+        // Xcode/direct builds — the file just doesn't exist. We must verify both
+        // the path pattern AND that the receipt file is actually present on disk.
+        guard let receiptURL = Bundle.main.appStoreReceiptURL else { return false }
+        return receiptURL.path.contains("_MASReceipt")
+            && FileManager.default.fileExists(atPath: receiptURL.path)
         #elseif os(iOS)
         // TestFlight builds have a sandbox receipt — treat them as App Store
         if Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" {
