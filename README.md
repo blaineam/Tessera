@@ -1,8 +1,8 @@
 # Tessera
 
-**Cryptographic App Licensing for macOS**
+**Cryptographic App Licensing for macOS & iOS**
 
-Unforgeable licenses. Device seat limiting. Stripe subscriptions. Zero tracking.
+Unforgeable licenses. Stripe subscriptions. Multi-app support. Zero tracking.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -10,17 +10,20 @@ Unforgeable licenses. Device seat limiting. Stripe subscriptions. Zero tracking.
 
 ## What is Tessera?
 
-Tessera is a complete, self-contained licensing platform for macOS apps distributed outside the Mac App Store. Fork this repo, run the setup wizard, and you have:
+Tessera is a complete, self-contained licensing platform for macOS and iOS apps distributed outside the App Store. Fork this repo, configure your app, and you have:
 
 - **Ed25519 signed license keys** — cryptographically unforgeable
-- **Device seat limiting** — restrict each license to N machines, server-enforced
+- **Multi-app support** — one Tessera repo manages licensing for all your apps
 - **Hardware-anchored trials** — tamper-resistant, clock-manipulation-proof
-- **Remote revocation** — via a static JSON file on your domain (no servers)
+- **Remote revocation** — via a static JSON file on your domain (no servers needed)
+- **Instant revocation enforcement** — checks on every app foreground, no 24h wait
+- **Device seat limiting** — restrict each license to N machines, server-enforced
 - **Stripe subscription billing** — automatic license delivery and renewal
-- **Management dashboard** — monitor, revoke, and nickname licenses
-- **GitHub Action CI** — generate licenses from anywhere
+- **Management dashboard** — multi-app tabs, generate signed keys, revoke licenses
+- **GitHub Action CI** — generate licenses per-app from anywhere
 - **Marketing site** — glassmorphic GitHub Pages site ready to deploy
-- **Dual MAS/Direct distribution** — single codebase, automatic runtime detection
+- **Dual App Store / Direct distribution** — single codebase, automatic runtime detection
+- **TestFlight support** — treated as App Store on both macOS and iOS
 
 All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and Cloudflare Workers (free tier).
 
@@ -31,7 +34,7 @@ All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and C
 ```
 Tessera/
 ├── Sources/Tessera/          # Swift Package — the library you import
-│   ├── Core/                 # License validator, revocation, keychain
+│   ├── Core/                 # License validator, revocation, keychain, MAS detection
 │   ├── Trial/                # Hardware-anchored trial system
 │   ├── Security/             # Binary integrity checker
 │   ├── UI/                   # SwiftUI gate, activation view, status badge
@@ -43,15 +46,17 @@ Tessera/
 │   ├── wrangler.toml         # Cloudflare Worker config
 │   ├── setup.sh              # One-command setup wizard
 │   └── requirements.txt      # Python dependencies
-├── Site/                     # GitHub Pages site (deploy to your repo)
+├── Site/                     # GitHub Pages site (deploy from this repo)
 │   ├── index.html            # Marketing page
-│   ├── dashboard.html        # License management dashboard
+│   ├── dashboard.html        # Multi-app license management dashboard
 │   ├── checkout.html         # Stripe checkout page template
+│   ├── apps/<app>/licensing/ # Per-app license & revocation data
 │   └── CNAME                 # Custom domain config
 ├── .github/workflows/        # GitHub Actions
-│   ├── tessera-generate-license.yml   # Manual + webhook license generation
-│   └── tessera-renew-license.yml      # Subscription renewal handling
-├── Package.swift             # Swift Package Manager manifest
+│   ├── tessera-generate-license.yml   # Per-app license generation
+│   ├── tessera-renew-license.yml      # Per-app subscription renewal
+│   └── static.yml                     # GitHub Pages deployment
+├── Package.swift             # Swift Package Manager manifest (macOS 13+, iOS 16+)
 ├── tessera.config.example.json  # Configuration template
 ├── INTEGRATION_GUIDE.md      # Step-by-step integration docs
 ├── WHY_TESSERA.md            # Comparison with alternatives
@@ -60,7 +65,7 @@ Tessera/
 
 ---
 
-## Quick Start (Fork & Deploy)
+## Quick Start
 
 ### 1. Fork this repo
 
@@ -88,8 +93,16 @@ Go to **Settings → Secrets and variables → Actions** and add:
 
 | Secret | Value |
 |--------|-------|
-| `TESSERA_PRIVATE_KEY` | Contents of `Tools/keys/private.pem` |
-| `PAGES_REPO_TOKEN` | GitHub PAT with `repo` scope |
+| `TESSERA_PRIVATE_KEY` | Shared fallback private key (PEM) |
+| `TESSERA_PRIVATE_KEY_<APP>` | Per-app private key, e.g. `TESSERA_PRIVATE_KEY_ARI` (optional, overrides shared) |
+
+And optionally (for email delivery):
+
+| Secret | Value |
+|--------|-------|
+| `SMTP_USERNAME` | Email account for license delivery |
+| `SMTP_PASSWORD` | Email password or app password |
+| `SMTP_FROM` | Sender address (e.g. `noreply@yourdomain.com`) |
 
 And optionally (for Stripe):
 
@@ -97,58 +110,160 @@ And optionally (for Stripe):
 |--------|-------|
 | `STRIPE_SECRET_KEY` | `sk_live_...` from Stripe |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_...` from Stripe |
-| `SMTP_USERNAME` | Email account for license delivery |
-| `SMTP_PASSWORD` | Email password or app password |
-
-Also add **repository variables** (Settings → Variables):
-
-| Variable | Value |
-|----------|-------|
-| `TESSERA_PAGES_REPO` | `yourname/yourname.github.io` |
-| `TESSERA_DATA_PATH` | `licensing` (path in pages repo) |
 
 ### 4. Add the Swift package to your app
 
-In Xcode: **File → Add Package Dependencies → Add Local** → select this directory.
+In Xcode: **File → Add Package Dependencies** → enter your Tessera repo URL.
+
+Or in `Package.swift`:
+```swift
+.package(url: "https://github.com/yourname/Tessera", branch: "main")
+```
 
 Then in your app:
 
 ```swift
 import Tessera
 
-// Configure once
 @MainActor
 let tessera = Tessera(configuration: .init(
     publicKeyBase64: "YOUR_PUBLIC_KEY_FROM_SETUP",
-    revocationURL: URL(string: "https://yourdomain.com/licensing/revoked.json")!,
+    revocationURL: URL(string: "https://yourdomain.com/apps/myapp/licensing/revoked.json")!,
     appIdentifier: "com.yourcompany.yourapp",
     appDisplayName: "Your App"
 ))
 
-// Gate your app (one line)
 @main
 struct MyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .tesseraGate(tessera)
+                .tesseraGateIfNeeded(tessera)
         }
     }
 }
 ```
 
-### 5. Deploy the site
+> **Note:** `tesseraGateIfNeeded` is the recommended entry point. It automatically detects App Store and TestFlight builds at runtime and skips the licensing gate — no compiler flags needed. Use `tesseraGate` if you always want to enforce licensing regardless of distribution channel.
 
-Copy `Site/` contents to your GitHub Pages repo. Update the `CNAME` file with your domain.
+### 5. Set up per-app data
 
-### 6. Generate your first license
+Create the licensing data files in your Site directory:
 
-Via GitHub Actions UI, or locally:
+```bash
+mkdir -p Site/apps/myapp/licensing
+echo '{"licenses":[],"updated":""}' > Site/apps/myapp/licensing/licenses.json
+echo '{"revoked":[],"messages":{},"updated":""}' > Site/apps/myapp/licensing/revoked.json
+```
+
+### 6. Add the app to the workflow
+
+Edit `.github/workflows/tessera-generate-license.yml` and add your app to the `app` input choices:
+
+```yaml
+inputs:
+  app:
+    type: choice
+    options:
+      - myapp
+```
+
+### 7. Deploy the site
+
+The `Site/` directory is deployed automatically to GitHub Pages via the included `static.yml` workflow on every push to `main`.
+
+### 8. Generate your first license
+
+**Via the dashboard** at `https://yourdomain.com/dashboard.html`:
+- Connect with a GitHub PAT
+- Configure your app with its slug, licenses path, and revocation path
+- Optionally paste your Ed25519 private key for client-side signing
+- Click "+ New License" — keys are generated and optionally emailed
+
+**Via GitHub Actions UI**: go to Actions → "Tessera: Generate License" → Run workflow
+
+**Via CLI**:
 ```bash
 python3 Tools/tessera_cli.py generate \
-    --private-key Tools/keys/private.pem \
+    --private-key keys/private.pem \
     --tier pro --duration 365
 ```
+
+---
+
+## Multi-App Support
+
+Tessera manages licensing for multiple apps from a single repo. Each app gets:
+
+- **Its own data directory**: `Site/apps/<app-slug>/licensing/`
+- **Its own private key** (optional): `TESSERA_PRIVATE_KEY_<APP_UPPER>` secret
+- **Its own tab** in the dashboard
+
+### Workflow
+
+The generate and renew workflows accept an `app` input that determines:
+1. Which private key to use (tries `TESSERA_PRIVATE_KEY_<APP>`, falls back to `TESSERA_PRIVATE_KEY`)
+2. Where to write license data (`Site/apps/<app>/licensing/`)
+
+### Dashboard
+
+The dashboard supports multiple apps via tabs. Each app is configured with:
+- **Name**: Display name
+- **Slug**: Lowercase identifier that matches the workflow's `app` choice (e.g. `ari`)
+- **Licenses path**: Path to `licenses.json` in the repo (e.g. `Site/apps/ari/licensing/licenses.json`)
+- **Revocation path**: Path to `revoked.json` in the repo
+
+Add apps in the initial setup screen or via Settings.
+
+---
+
+## Dual Distribution (App Store + Direct)
+
+Support both App Store and direct distribution from one codebase — **no compiler flags needed**.
+
+Tessera detects the distribution channel at runtime:
+
+| Platform | App Store | TestFlight | Xcode / Direct |
+|----------|-----------|------------|----------------|
+| **macOS** | `_MASReceipt/receipt` exists on disk | `sandboxReceipt` filename | No receipt file on disk |
+| **iOS** | No `embedded.mobileprovision` | No `embedded.mobileprovision` | Has `embedded.mobileprovision` |
+| **Simulator** | — | — | Always treated as direct build |
+
+```swift
+// Automatically a no-op on App Store and TestFlight builds
+ContentView()
+    .tesseraGateIfNeeded(tessera)
+```
+
+TestFlight builds on **both macOS and iOS** are treated as App Store installs — users won't see a licensing prompt.
+
+---
+
+## Revocation
+
+Revoked licenses are enforced via a static `revoked.json` file:
+
+```json
+{
+  "revoked": ["license-uuid-1", "license-uuid-2"],
+  "messages": {
+    "license-uuid-1": "Transferred to a new key"
+  },
+  "updated": "2026-04-05T12:00:00Z"
+}
+```
+
+### Instant enforcement
+
+Tessera checks the revocation list:
+- **On every app launch** (during `evaluate()`)
+- **On every app foreground** (via `recheckRevocation()`, called automatically by the gate modifier)
+
+Foreground checks always bypass the cache and fetch the latest list. There's no 24-hour wait for revocations to take effect.
+
+### Offline behavior
+
+If the revocation server is unreachable, Tessera uses the cached list within the **offline grace period** (default: 30 days). After the grace period expires without a successful check, the app requires connectivity.
 
 ---
 
@@ -185,32 +300,6 @@ Customer → Checkout Page → Stripe → Webhook → Cloudflare Worker → GitH
    - `duration_days`: `365` (or `30` for monthly)
    - `features`: `0`
 
-### How Renewals Work
-
-When a subscription renews:
-1. Stripe fires `invoice.paid`
-2. The Cloudflare Worker receives it and triggers the **renewal workflow**
-3. A new license key is generated with the new expiration date
-4. The old license is marked as `renewed_by` in `licenses.json`
-5. The new key is emailed to the customer
-6. The old key continues to work until its original expiry (graceful overlap)
-
----
-
-## Dual Distribution (MAS + Direct)
-
-Support both Mac App Store and direct distribution from one codebase — **no compiler flags needed**.
-
-Tessera automatically detects the distribution channel at runtime by inspecting the bundle's receipt path:
-- **macOS**: App Store receipts live at `_MASReceipt/receipt`; direct distribution uses `Resources/receipt`
-- **iOS**: App Store builds lack `embedded.mobileprovision`; TestFlight/ad-hoc builds include it
-
-```swift
-// Automatically a no-op on App Store builds — detected at runtime
-ContentView()
-    .tesseraGateIfNeeded(tessera)
-```
-
 ---
 
 ## Device Seat Limiting
@@ -220,7 +309,7 @@ Restrict each license key to a maximum number of simultaneous devices:
 ```swift
 let tessera = Tessera(configuration: .init(
     publicKeyBase64: "YOUR_KEY",
-    revocationURL: URL(string: "https://yourdomain.com/licensing/revoked.json")!,
+    revocationURL: URL(string: "https://yourdomain.com/apps/myapp/licensing/revoked.json")!,
     appIdentifier: "com.yourcompany.yourapp",
     appDisplayName: "Your App",
     trialRegistryURL: URL(string: "https://tessera.yourname.workers.dev")!,
@@ -229,43 +318,7 @@ let tessera = Tessera(configuration: .init(
 ))
 ```
 
-### How it works
-
-1. On **first activation**, the app registers the device fingerprint with the Cloudflare Worker
-2. The worker checks how many devices are already activated for that license
-3. If under the limit → activation succeeds; at the limit → activation is rejected
-4. On **deactivation**, the device seat is released so another machine can use it
-5. Activation status is **cached locally** with the same offline grace period as revocation
-
-### Worker setup
-
-The activation system uses the same Cloudflare Worker as the trial registry. Add the `MAX_DEVICES` env var:
-
-```bash
-npx wrangler secret put TRIAL_SECRET        # same secret used for trials
-echo "3" | npx wrangler secret put MAX_DEVICES  # max devices per license
-npx wrangler deploy
-```
-
-### Offline behavior
-
-- **Initial activation** requires network connectivity (must register the device)
-- After activation, the app caches the status and works **offline for the grace period** (default: 30 days)
-- Re-verification happens on the same schedule as revocation checks (default: every 24 hours)
-- If the server is unreachable within the grace period, the cached activation is trusted
-
----
-
-## Management Dashboard
-
-Open `Site/dashboard.html` in your browser. It connects to GitHub via your PAT (stored in localStorage only) and provides:
-
-- License overview (active, expiring, expired, revoked counts)
-- Expiration timeline visualization
-- Editable nicknames for each license
-- One-click revocation with custom messages
-- Subscription tracking with renewal indicators
-- Manual license entry
+The activation system uses the same Cloudflare Worker as the trial registry.
 
 ---
 
@@ -279,8 +332,8 @@ Open `Site/dashboard.html` in your browser. It connects to GitHub via your PAT (
 | Reset trial (delete Keychain) | Hidden file persists; any anchor = trial started |
 | Clock manipulation | Monotonic date tracking detects backwards clock |
 | Copy trial between Macs | Hardware fingerprint (IOPlatformUUID) mismatch |
-| Share license globally | Device seat limiting — server-enforced max devices per license |
-| MITM activation/trial | HMAC-authenticated requests & responses — secret never on wire |
+| Share license globally | Device seat limiting — server-enforced max devices |
+| MITM activation/trial | HMAC-authenticated requests & responses |
 | MITM revocation check | HTTPS + JSON schema validation |
 
 ---
@@ -289,16 +342,16 @@ Open `Site/dashboard.html` in your browser. It connects to GitHub via your PAT (
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `publicKeyBase64` | String | required | Ed25519 public key |
+| `publicKeyBase64` | String | required | Ed25519 public key (base64, 32 bytes) |
 | `revocationURL` | URL | required | URL to `revoked.json` |
-| `trialDurationDays` | Int | 14 | Trial length (0 = disabled) |
-| `appIdentifier` | String | required | Bundle ID |
+| `trialDurationDays` | Int | 14 | Trial length (0 = no trial, license required immediately) |
+| `appIdentifier` | String | required | Bundle ID (used for Keychain namespace) |
 | `offlineGracePeriodDays` | Int | 30 | Days without revocation check allowed |
-| `revocationCheckIntervalHours` | Int | 24 | Revocation check frequency |
-| `trialSalt` | String | "tessera-v1" | Salt for trial tokens |
+| `revocationCheckIntervalHours` | Int | 24 | Revocation cache TTL (foreground checks always bypass) |
+| `trialSalt` | String | "tessera-v1" | Salt for trial tokens (change between major versions) |
 | `purchaseURL` | URL? | nil | Link to purchase page |
-| `appDisplayName` | String | "App" | Name in activation UI |
-| `trialRegistryURL` | URL? | nil | Cloudflare Worker URL for trials + activation |
+| `appDisplayName` | String | "App" | Name shown in activation UI |
+| `trialRegistryURL` | URL? | nil | Cloudflare Worker URL for server-side trials + activation |
 | `trialRegistrySecret` | String? | nil | Shared secret for Worker authentication |
 | `maxDevicesPerLicense` | Int | 0 | Max devices per license (0 = unlimited) |
 
