@@ -154,13 +154,18 @@ input:focus, select:focus { border-color:var(--accent); }
             <input type="text" id="setupAppName" placeholder="My App">
         </div>
         <div class="form-group">
+            <label>App Slug (used in workflow dispatch)</label>
+            <input type="text" id="setupAppSlug" placeholder="my-app">
+            <div class="hint">Lowercase identifier — must match the workflow's app choice list</div>
+        </div>
+        <div class="form-group">
             <label>Licenses path</label>
-            <input type="text" id="setupLicensesPath" value="licensing/licenses.json" placeholder="licensing/my-app/licenses.json">
+            <input type="text" id="setupLicensesPath" value="licensing/licenses.json" placeholder="Site/apps/my-app/licensing/licenses.json">
             <div class="hint">Path to licenses.json in the repo above</div>
         </div>
         <div class="form-group">
             <label>Revocation path</label>
-            <input type="text" id="setupRevokedPath" value="licensing/revoked.json" placeholder="licensing/my-app/revoked.json">
+            <input type="text" id="setupRevokedPath" value="licensing/revoked.json" placeholder="Site/apps/my-app/licensing/revoked.json">
             <div class="hint">Path to revoked.json in the repo above</div>
         </div>
         <hr>
@@ -330,12 +335,17 @@ input:focus, select:focus { border-color:var(--accent); }
             <input type="text" id="addAppName" placeholder="My Other App" style="width:100%;">
         </div>
         <div class="form-group">
+            <label>App Slug (used in workflow dispatch)</label>
+            <input type="text" id="addAppSlug" placeholder="my-app" style="width:100%;">
+            <div class="hint" style="font-size:11px;color:var(--text-dim);margin-top:2px;">Lowercase identifier — must match the workflow's app choice list</div>
+        </div>
+        <div class="form-group">
             <label>Licenses path</label>
-            <input type="text" id="addAppLicensesPath" placeholder="licensing/my-app/licenses.json" style="width:100%;">
+            <input type="text" id="addAppLicensesPath" placeholder="Site/apps/my-app/licensing/licenses.json" style="width:100%;">
         </div>
         <div class="form-group">
             <label>Revocation path</label>
-            <input type="text" id="addAppRevokedPath" placeholder="licensing/my-app/revoked.json" style="width:100%;">
+            <input type="text" id="addAppRevokedPath" placeholder="Site/apps/my-app/licensing/revoked.json" style="width:100%;">
         </div>
         <div class="actions">
             <button class="btn" onclick="closeAddAppModal()">Cancel</button>
@@ -388,6 +398,7 @@ function activeApp() {
                 branch: parsed.branch || 'main',
                 apps: [{
                     name: 'Default',
+                    slug: 'default',
                     licensesPath: parsed.licensesPath,
                     revokedPath: parsed.revokedPath
                 }],
@@ -408,16 +419,18 @@ function connect() {
     const repo = document.getElementById('setupRepo').value.trim();
     const branch = document.getElementById('setupBranch').value.trim() || 'main';
     const appName = document.getElementById('setupAppName').value.trim() || 'Default';
+    const appSlug = document.getElementById('setupAppSlug').value.trim().toLowerCase();
     const licensesPath = document.getElementById('setupLicensesPath').value.trim();
     const revokedPath = document.getElementById('setupRevokedPath').value.trim();
     const signingKey = document.getElementById('setupSigningKey').value.trim();
 
     if (!token || !repo) { toast('Token and repo required', 'error'); return; }
+    if (!appSlug) { toast('App slug required', 'error'); return; }
     if (!licensesPath || !revokedPath) { toast('License and revocation paths required', 'error'); return; }
 
     config = {
         token, repo, branch,
-        apps: [{ name: appName, licensesPath, revokedPath }],
+        apps: [{ name: appName, slug: appSlug, licensesPath, revokedPath }],
         activeApp: 0
     };
     localStorage.setItem('tessera_config', JSON.stringify(config));
@@ -487,6 +500,7 @@ function removeApp(index) {
 // --- Add App Modal ---
 function showAddAppModal() {
     document.getElementById('addAppName').value = '';
+    document.getElementById('addAppSlug').value = '';
     document.getElementById('addAppLicensesPath').value = '';
     document.getElementById('addAppRevokedPath').value = '';
     document.getElementById('addAppModal').classList.add('active');
@@ -498,13 +512,15 @@ function closeAddAppModal() {
 
 function confirmAddApp() {
     const name = document.getElementById('addAppName').value.trim();
+    const slug = document.getElementById('addAppSlug').value.trim().toLowerCase();
     const licensesPath = document.getElementById('addAppLicensesPath').value.trim();
     const revokedPath = document.getElementById('addAppRevokedPath').value.trim();
 
     if (!name) { toast('App name required', 'error'); return; }
+    if (!slug) { toast('App slug required', 'error'); return; }
     if (!licensesPath || !revokedPath) { toast('Both paths required', 'error'); return; }
 
-    config.apps.push({ name, licensesPath, revokedPath });
+    config.apps.push({ name, slug, licensesPath, revokedPath });
     config.activeApp = config.apps.length - 1;
     localStorage.setItem('tessera_config', JSON.stringify(config));
 
@@ -532,7 +548,8 @@ function renderSettingsAppList() {
         div.style.cssText = 'border:1px solid var(--glass-border);border-radius:8px;padding:12px;margin-bottom:8px;';
         div.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <input type="text" value="${escHtml(app.name)}" data-settings-app-name="${i}" style="font-weight:600;width:60%;">
+                <input type="text" value="${escHtml(app.name)}" data-settings-app-name="${i}" style="font-weight:600;width:40%;">
+                <input type="text" value="${escHtml(app.slug || '')}" data-settings-app-slug="${i}" placeholder="app-slug" style="width:30%;font-size:12px;color:var(--text-dim);">
                 ${config.apps.length > 1 ? `<button class="btn btn-danger btn-sm" onclick="settingsRemoveApp(${i})">Remove</button>` : ''}
             </div>
             <div class="form-group" style="margin-bottom:6px;">
@@ -549,7 +566,7 @@ function renderSettingsAppList() {
 }
 
 function settingsAddApp() {
-    config.apps.push({ name: 'New App', licensesPath: 'licensing/licenses.json', revokedPath: 'licensing/revoked.json' });
+    config.apps.push({ name: 'New App', slug: 'new-app', licensesPath: 'licensing/licenses.json', revokedPath: 'licensing/revoked.json' });
     renderSettingsAppList();
 }
 
@@ -568,9 +585,11 @@ function saveSettings() {
     const appCount = config.apps.length;
     for (let i = 0; i < appCount; i++) {
         const nameInput = document.querySelector(`[data-settings-app-name="${i}"]`);
+        const slugInput = document.querySelector(`[data-settings-app-slug="${i}"]`);
         const licInput = document.querySelector(`[data-settings-app-licenses="${i}"]`);
         const revInput = document.querySelector(`[data-settings-app-revoked="${i}"]`);
         if (nameInput) config.apps[i].name = nameInput.value.trim() || 'Untitled';
+        if (slugInput) config.apps[i].slug = slugInput.value.trim().toLowerCase();
         if (licInput) config.apps[i].licensesPath = licInput.value.trim();
         if (revInput) config.apps[i].revokedPath = revInput.value.trim();
     }
@@ -835,6 +854,8 @@ function setGenStatus(msg) {
 }
 
 async function dispatchWorkflow(tier, durationDays, nickname, email) {
+    const app = activeApp();
+    const appSlug = app?.slug || 'default';
     const workflowFile = 'tessera-generate-license.yml';
     const url = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/dispatches`;
     const res = await fetch(url, {
@@ -843,6 +864,7 @@ async function dispatchWorkflow(tier, durationDays, nickname, email) {
         body: JSON.stringify({
             ref: config.branch,
             inputs: {
+                app: appSlug,
                 tier,
                 duration_days: String(durationDays),
                 features: '0',

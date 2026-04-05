@@ -3,6 +3,12 @@ name: "Tessera: Generate License"
 on:
   workflow_dispatch:
     inputs:
+      app:
+        description: "App to generate the license for"
+        required: true
+        type: choice
+        options:
+          - ari
       tier:
         description: "License tier"
         required: true
@@ -49,10 +55,6 @@ on:
 jobs:
   generate-license:
     runs-on: ubuntu-latest
-    env:
-      # Configure these for your project — or use repo variables
-      PAGES_REPO: ${{ vars.TESSERA_PAGES_REPO || 'blaineam/blaineam.github.io' }}
-      DATA_PATH: ${{ vars.TESSERA_DATA_PATH || 'licensing' }}
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -65,10 +67,31 @@ jobs:
       - name: Install dependencies
         run: pip install -r Tools/requirements.txt
 
+      - name: Resolve per-app private key
+        id: appconfig
+        run: |
+          APP="${{ inputs.app }}"
+          # Map app name to uppercase for secret lookup
+          APP_UPPER=$(echo "$APP" | tr '[:lower:]-' '[:upper:]_')
+
+          # Data path is always Site/apps/<app>/licensing within this repo
+          echo "data_path=Site/apps/${APP}/licensing" >> "$GITHUB_OUTPUT"
+          echo "app_upper=${APP_UPPER}" >> "$GITHUB_OUTPUT"
+
       - name: Write private key to temp file
         run: |
           TMPKEY="$(mktemp)"
-          echo "${{ secrets.TESSERA_PRIVATE_KEY }}" > "$TMPKEY"
+          # Try app-specific key first (TESSERA_PRIVATE_KEY_ARI), fall back to shared key
+          APP_UPPER="${{ steps.appconfig.outputs.app_upper }}"
+          KEY_VALUE="${{ secrets[format('TESSERA_PRIVATE_KEY_{0}', steps.appconfig.outputs.app_upper)] }}"
+          if [ -z "$KEY_VALUE" ]; then
+            KEY_VALUE="${{ secrets.TESSERA_PRIVATE_KEY }}"
+          fi
+          if [ -z "$KEY_VALUE" ]; then
+            echo "::error::No private key found for app '${{ inputs.app }}'. Set TESSERA_PRIVATE_KEY_${APP_UPPER} or TESSERA_PRIVATE_KEY in repo secrets."
+            exit 1
+          fi
+          echo "$KEY_VALUE" > "$TMPKEY"
           chmod 600 "$TMPKEY"
           echo "TMPKEY=$TMPKEY" >> "$GITHUB_ENV"
 
@@ -97,18 +120,12 @@ jobs:
           echo "license_key=$LICENSE_KEY" >> "$GITHUB_OUTPUT"
           echo "license_id=$LICENSE_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Clone pages repo
-        run: |
-          git clone "https://x-access-token:${{ secrets.PAGES_REPO_TOKEN }}@github.com/${{ env.PAGES_REPO }}.git" /tmp/pages-repo
-
       - name: Update licenses.json
         run: |
-          LICENSES_DIR="/tmp/pages-repo/${{ env.DATA_PATH }}"
-          LICENSES_FILE="$LICENSES_DIR/licenses.json"
-
-          mkdir -p "$LICENSES_DIR"
+          LICENSES_FILE="${{ steps.appconfig.outputs.data_path }}/licenses.json"
 
           if [ ! -f "$LICENSES_FILE" ]; then
+            mkdir -p "$(dirname "$LICENSES_FILE")"
             echo '{"licenses":[],"updated":""}' > "$LICENSES_FILE"
           fi
 
@@ -152,14 +169,13 @@ jobs:
               json.dump(data, f, indent=2)
           PYEOF
 
-      - name: Commit and push to pages repo
+      - name: Commit and push license update
         run: |
-          cd /tmp/pages-repo
           git config user.name "tessera[bot]"
           git config user.email "tessera[bot]@users.noreply.github.com"
-          git add "${{ env.DATA_PATH }}/licenses.json"
+          git add "${{ steps.appconfig.outputs.data_path }}/licenses.json"
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Tessera: add ${{ inputs.tier }} license ${{ steps.generate.outputs.license_id }}"
+          git commit -m "Tessera: add ${{ inputs.tier }} license for ${{ inputs.app }} (${{ steps.generate.outputs.license_id }})"
           git push
 
       - name: Send license via email
@@ -209,6 +225,7 @@ jobs:
 
           | Field | Value |
           |-------|-------|
+          | **App** | ${{ inputs.app }} |
           | **License ID** | \`${{ steps.generate.outputs.license_id }}\` |
           | **Tier** | ${{ inputs.tier }} |
           | **Duration** | ${{ inputs.duration_days == '0' && 'Perpetual' || format('{0} days', inputs.duration_days) }} |
