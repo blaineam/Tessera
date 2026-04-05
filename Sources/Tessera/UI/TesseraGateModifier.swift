@@ -13,6 +13,7 @@ struct TesseraGateModifier<ActivationContent: View>: ViewModifier {
     @ObservedObject var tessera: Tessera
     let customActivationView: () -> ActivationContent
     @State private var hasEvaluated = false
+    @Environment(\.scenePhase) private var scenePhase
 
     func body(content: Content) -> some View {
         Group {
@@ -35,6 +36,13 @@ struct TesseraGateModifier<ActivationContent: View>: ViewModifier {
         .task {
             await tessera.evaluate()
             hasEvaluated = true
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                Task {
+                    await tessera.recheckRevocation()
+                }
+            }
         }
     }
 }

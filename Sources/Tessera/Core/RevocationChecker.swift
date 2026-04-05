@@ -43,8 +43,12 @@ actor RevocationChecker {
     /// Fetches the remote list if the cache is stale, falls back to cache on network failure.
     /// Returns the revocation message if revoked, nil if not revoked.
     func checkRevocation(licenseID: String) async -> (isRevoked: Bool, message: String?) {
-        // Try to get a fresh list
-        let list = await fetchOrUseCachedList()
+        return await checkRevocation(licenseID: licenseID, forceRefresh: false)
+    }
+
+    /// Check revocation with an option to bypass the cache.
+    func checkRevocation(licenseID: String, forceRefresh: Bool) async -> (isRevoked: Bool, message: String?) {
+        let list = await fetchOrUseCachedList(forceRefresh: forceRefresh)
 
         guard let list = list else {
             // No cache and no network — check grace period
@@ -67,9 +71,9 @@ actor RevocationChecker {
 
     // MARK: - Private
 
-    private func fetchOrUseCachedList() async -> RevocationList? {
-        // Check if cache is still fresh
-        if let cached = loadCachedList(), !isCacheStale() {
+    private func fetchOrUseCachedList(forceRefresh: Bool = false) async -> RevocationList? {
+        // Check if cache is still fresh (unless forced)
+        if !forceRefresh, let cached = loadCachedList(), !isCacheStale() {
             return cached
         }
 
