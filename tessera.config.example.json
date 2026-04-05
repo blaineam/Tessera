@@ -32,6 +32,13 @@
     "trial_secret": "REPLACE_WITH_RANDOM_SECRET"
   },
 
+  "device_activation": {
+    "_comment": "Optional. Restricts each license to a maximum number of simultaneous devices.",
+    "_comment2": "Uses the same Cloudflare Worker as the trial registry. Set max_devices on the worker via the MAX_DEVICES env var.",
+    "enabled": false,
+    "max_devices_per_license": 3
+  },
+
   "stripe": {
     "_comment": "Optional. Set enabled=true to activate Stripe subscription billing.",
     "enabled": false,

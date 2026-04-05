@@ -39,6 +39,7 @@ public final class Tessera: ObservableObject {
     private let validator: LicenseValidator
     private let revocationChecker: RevocationChecker
     private let trialManager: TrialManager
+    private let activationManager: ActivationManager
     private let keychain: KeychainStore
 
     private static let licenseKeyStorageKey = "active_license_key"
@@ -57,6 +58,7 @@ public final class Tessera: ObservableObject {
 
         self.revocationChecker = RevocationChecker(configuration: configuration)
         self.trialManager = TrialManager(configuration: configuration)
+        self.activationManager = ActivationManager(configuration: configuration)
         self.keychain = KeychainStore(appIdentifier: configuration.appIdentifier)
     }
 
@@ -91,6 +93,23 @@ public final class Tessera: ObservableObject {
                     license = verifiedLicense
                     state = .revoked(verifiedLicense, message: revocation.message)
                     return
+                }
+
+                // Step 3b: Check device activation (if seat limiting is enabled)
+                if activationManager.isEnabled {
+                    let activationCheck = await activationManager.checkActivation(licenseID: verifiedLicense.lid)
+                    switch activationCheck {
+                    case .active:
+                        break // Device is activated, continue
+                    case .notActive:
+                        // Device was deactivated remotely — remove license
+                        keychain.delete(Self.licenseKeyStorageKey)
+                        license = nil
+                        state = .unlicensed
+                        return
+                    case .serverUnreachable:
+                        break // Within grace period or cache — allow through
+                    }
                 }
 
                 license = verifiedLicense
@@ -143,6 +162,19 @@ public final class Tessera: ObservableObject {
             throw TesseraError.licenseRevoked(message: revocation.message)
         }
 
+        // Register device activation (if seat limiting is enabled)
+        if activationManager.isEnabled {
+            let result = await activationManager.activate(licenseID: verifiedLicense.lid)
+            switch result {
+            case .activated, .alreadyActive:
+                break // Success — proceed
+            case .limitReached(_, let maxDevices):
+                throw TesseraError.activationLimitReached(maxDevices: maxDevices)
+            case .serverUnreachable:
+                throw TesseraError.activationServerUnreachable
+            }
+        }
+
         // Store the raw key
         try keychain.setString(rawKey, for: Self.licenseKeyStorageKey)
 
@@ -151,13 +183,20 @@ public final class Tessera: ObservableObject {
         state = .licensed(verifiedLicense)
     }
 
-    /// Deactivate the current license (removes it from this machine).
+    /// Deactivate the current license (removes it from this machine and frees the device seat).
     public func deactivate() {
+        let licenseID = license?.lid
+
         keychain.delete(Self.licenseKeyStorageKey)
         license = nil
 
-        // Fall back to trial if available (async check)
+        // Release device seat and fall back to trial
         Task {
+            // Release the device seat on the server (if activation is enabled)
+            if let licenseID, activationManager.isEnabled {
+                _ = await activationManager.deactivate(licenseID: licenseID)
+            }
+
             let trialResult = await trialManager.checkTrial()
             switch trialResult {
             case .success(let daysRemaining):
@@ -189,6 +228,7 @@ public final class Tessera: ObservableObject {
     public func resetAll() {
         keychain.delete(Self.licenseKeyStorageKey)
         trialManager.resetTrial()
+        activationManager.resetActivation()
         license = nil
         state = .unlicensed
     }

@@ -6,7 +6,7 @@ You've built a great macOS app. You want to sell it outside the Mac App Store �
 
 Your options aren't great:
 
-**SaaS licensing services** (Paddle, KeyGen, LemonSqueezy) charge ongoing fees, require your app to phone home to *their* servers, collect analytics on your users, and add a dependency on infrastructure you don't control. If they go down, your customers can't activate. If they change pricing, you're locked in.
+**SaaS licensing services** (Paddle, KeyGen, LemonSqueezy) charge ongoing fees, require your app to phone home to *their* servers, collect analytics on your users, and add a dependency on infrastructure you don't control. If they go down, your customers can't activate. If they change pricing, you're locked in. Tessera's device activation and trial registry talk to a Cloudflare Worker *you* own — no third-party dependency, no user tracking, and it runs on the free tier.
 
 **DIY server-based licensing** means building and maintaining a license server, database, API, authentication, SSL certificates, monitoring, and backups. That's a full-time job on top of building your actual app.
 
@@ -21,7 +21,7 @@ Tessera takes a fundamentally different approach: **cryptographic proof, not ser
 A Tessera license key is a JSON payload signed with Ed25519 — the same algorithm used by SSH, Signal, and blockchain systems. The signature can be verified by anyone with the public key (embedded in your app), but can only be created by someone with the private key (you).
 
 This means:
-- **No servers to maintain.** Verification happens entirely on the user's machine.
+- **Minimal infrastructure.** License verification happens on-device. Device activation and trial tracking use a Cloudflare Worker you control (free tier).
 - **No user tracking.** The license contains zero PII — just an ID, tier, and expiry date.
 - **No ongoing costs.** You generate keys with a CLI tool or GitHub Action. For free. Forever.
 - **No single point of failure.** Your app doesn't depend on any external service being online.
@@ -70,7 +70,7 @@ And even then, clock manipulation is detected via monotonic date tracking. This 
 
 - **Indie developers** who want licensing without overhead
 - **Small teams** that don't want to maintain infrastructure
-- **Privacy-focused apps** that can't phone home to third parties
+- **Privacy-focused apps** that don't want third-party data collection
 - **Enterprise tools** that need offline-capable licensing
 - **Open source projects** offering commercial licenses
 - **Anyone** who wants the Mac App Store convenience of "it just works" but for direct distribution

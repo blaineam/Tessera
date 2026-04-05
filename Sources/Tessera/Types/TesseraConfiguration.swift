@@ -52,6 +52,13 @@ public struct TesseraConfiguration: Sendable {
     /// Only needed if trialRegistryURL is set.
     public let trialRegistrySecret: String?
 
+    /// Maximum number of devices that can simultaneously use a single license key.
+    /// Set to 0 to disable device activation limits (unlimited installs).
+    /// Requires `trialRegistryURL` to be set (uses the same Cloudflare Worker).
+    /// The server enforces this via the `MAX_DEVICES` environment variable —
+    /// this value is sent as a hint but the server has the final say.
+    public let maxDevicesPerLicense: Int
+
     public init(
         publicKeyBase64: String,
         revocationURL: URL,
@@ -63,7 +70,8 @@ public struct TesseraConfiguration: Sendable {
         purchaseURL: URL? = nil,
         appDisplayName: String = "App",
         trialRegistryURL: URL? = nil,
-        trialRegistrySecret: String? = nil
+        trialRegistrySecret: String? = nil,
+        maxDevicesPerLicense: Int = 0
     ) {
         self.publicKeyBase64 = publicKeyBase64
         self.revocationURL = revocationURL
@@ -76,5 +84,6 @@ public struct TesseraConfiguration: Sendable {
         self.appDisplayName = appDisplayName
         self.trialRegistryURL = trialRegistryURL
         self.trialRegistrySecret = trialRegistrySecret
+        self.maxDevicesPerLicense = maxDevicesPerLicense
     }
 }
