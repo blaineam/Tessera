@@ -12,7 +12,20 @@
         "next_renewal": ""
       },
       "revoked": true
+    },
+    {
+      "lid": "b8c0c44e-9c51-4f4b-be8a-efd0599a3497",
+      "tier": "pro",
+      "issued": "2026-04-05T10:07:59.797Z",
+      "expires": "2027-04-05T10:07:59.797Z",
+      "nickname": "Blaine 2",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": ""
+      },
+      "revoked": false
     }
   ],
-  "updated": "2026-04-05T10:07:42.003Z"
+  "updated": "2026-04-05T10:07:59.797Z"
 }
