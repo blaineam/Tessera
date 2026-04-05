@@ -25,7 +25,20 @@
         "next_renewal": ""
       },
       "revoked": false
+    },
+    {
+      "lid": "d99bc7bd-ba9c-4930-9ee8-10fca392a588",
+      "tier": "pro",
+      "issued": "2026-04-05T11:29:59.900Z",
+      "expires": "2027-04-05T11:29:59.900Z",
+      "nickname": "",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": ""
+      },
+      "revoked": false
     }
   ],
-  "updated": "2026-04-05T10:07:59.797Z"
+  "updated": "2026-04-05T11:29:59.900Z"
 }
