@@ -24,7 +24,7 @@
         "interval": "yearly",
         "next_renewal": ""
       },
-      "revoked": false
+      "revoked": true
     },
     {
       "lid": "d99bc7bd-ba9c-4930-9ee8-10fca392a588",
@@ -70,5 +70,5 @@
       "revoked": false
     }
   ],
-  "updated": "2026-04-05T12:18:01Z"
+  "updated": "2026-04-05T12:21:41.978Z"
 }
