@@ -37,7 +37,7 @@ struct TesseraGateModifier<ActivationContent: View>: ViewModifier {
             await tessera.evaluate()
             hasEvaluated = true
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 Task {
                     await tessera.recheckRevocation()
