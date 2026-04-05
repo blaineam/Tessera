@@ -97,8 +97,8 @@
         "interval": "yearly",
         "next_renewal": "2027-04-05T12:49:28Z"
       },
-      "revoked": false
+      "revoked": true
     }
   ],
-  "updated": "2026-04-05T12:49:28Z"
+  "updated": "2026-04-05T12:49:57.096Z"
 }
