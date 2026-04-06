@@ -227,6 +227,33 @@ def cmd_revoke(args):
     print(f"Revocation list saved to: {revoked_file}")
 
 
+def cmd_sign_revocation_list(args):
+    """Sign an existing revocation list without adding a new revocation."""
+    revoked_file = args.revoked_file or "revoked.json"
+
+    if not os.path.exists(revoked_file):
+        print(f"ERROR: Revocation list not found: {revoked_file}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(revoked_file, "r") as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        data = {"revoked": data, "messages": {}, "updated": ""}
+
+    if not data.get("updated"):
+        data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    private_key = load_private_key(args.private_key)
+    data["signature"] = sign_revocation_list(data, private_key)
+
+    with open(revoked_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+    print(f"Revocation list signed ({len(data.get('revoked', []))} entries)")
+    print(f"Saved to: {revoked_file}")
+
+
 def cmd_inspect(args):
     key = args.key
 
@@ -292,6 +319,11 @@ def main():
     rev.add_argument("--revoked-file", default="revoked.json", help="Path to revocation list JSON")
     rev.add_argument("--private-key", default=None, help="Path to Ed25519 private key PEM (signs the revocation list)")
 
+    # -- sign-revocation-list --
+    srl = subparsers.add_parser("sign-revocation-list", help="Sign an existing revocation list")
+    srl.add_argument("--private-key", required=True, help="Path to Ed25519 private key PEM")
+    srl.add_argument("--revoked-file", default="revoked.json", help="Path to revocation list JSON")
+
     # -- inspect --
     ins = subparsers.add_parser("inspect", help="Show license info without verifying signature")
     ins.add_argument("--key", required=True, help="License key string (TESS-...)")
@@ -303,6 +335,7 @@ def main():
         "generate": cmd_generate,
         "verify": cmd_verify,
         "revoke": cmd_revoke,
+        "sign-revocation-list": cmd_sign_revocation_list,
         "inspect": cmd_inspect,
     }
     commands[args.command](args)

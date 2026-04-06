@@ -48,7 +48,16 @@ struct IntegrityChecker {
         // Build a requirement that checks the Team ID if configured
         var requirement: SecRequirement?
         if let teamID = expectedTeamID, !teamID.isEmpty {
-            let requirementString = "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\"" as CFString
+            // Sanitize Team ID: must be alphanumeric only (Apple Team IDs are 10 alphanumeric chars)
+            let sanitizedTeamID = teamID.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            guard sanitizedTeamID == teamID, !sanitizedTeamID.isEmpty else {
+                #if DEBUG
+                return true
+                #else
+                return false
+                #endif
+            }
+            let requirementString = "anchor apple generic and certificate leaf[subject.OU] = \"\(sanitizedTeamID)\"" as CFString
             let reqStatus = SecRequirementCreateWithString(requirementString, [], &requirement)
             if reqStatus != errSecSuccess {
                 // Failed to create requirement — fail closed in release

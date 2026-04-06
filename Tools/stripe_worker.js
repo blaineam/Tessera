@@ -172,7 +172,7 @@ async function handleTrialRegister(request, env, corsHeaders) {
   // Check if already registered
   const existing = await env.TRIAL_KV.get(kvKey);
   if (existing) {
-    const record = JSON.parse(existing);
+    const record = safeJsonParse(existing, {});
     const registeredAt = record.registered_at;
     const action = "register:denied";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
@@ -234,7 +234,7 @@ async function handleTrialCheck(request, env, corsHeaders) {
   const nonce = crypto.randomUUID();
 
   if (existing) {
-    const record = JSON.parse(existing);
+    const record = safeJsonParse(existing, {});
     const registeredAt = record.registered_at;
     const action = "check:used";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
@@ -357,7 +357,8 @@ async function handleActivationActivate(request, env, corsHeaders) {
 
   // Load existing activation record
   const existing = await env.TRIAL_KV.get(kvKey);
-  let record = existing ? JSON.parse(existing) : { devices: [] };
+  let record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
+  if (!Array.isArray(record.devices)) record.devices = [];
 
   // Check if this device is already activated
   const alreadyActive = record.devices.some(d => d.fingerprint === fingerprint);
@@ -392,12 +393,36 @@ async function handleActivationActivate(request, env, corsHeaders) {
     }, 200, corsHeaders);
   }
 
-  // Activate this device
+  // Activate this device.
+  // Re-read after write to mitigate TOCTOU race where two concurrent requests
+  // could both pass the device limit check. If another request snuck in and
+  // we now exceed the limit, roll back.
   record.devices.push({
     fingerprint,
     activated_at: new Date().toISOString()
   });
   await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
+
+  // Verify we didn't exceed the limit due to a race
+  const verifyRaw = await env.TRIAL_KV.get(kvKey);
+  const verifyRecord = verifyRaw ? safeJsonParse(verifyRaw, { devices: [] }) : { devices: [] };
+  if ((verifyRecord.devices || []).length > maxDevices) {
+    // Race condition — roll back this activation
+    verifyRecord.devices = (verifyRecord.devices || []).filter(d => d.fingerprint !== fingerprint);
+    await env.TRIAL_KV.put(kvKey, JSON.stringify(verifyRecord));
+    const rollbackAction = "activate:denied";
+    const rollbackHMAC = await computeResponseHMAC(rollbackAction, fingerprint, nonce, "", env.TRIAL_SECRET);
+    const rollbackSig = await computeResponseSignature(rollbackAction, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
+    return jsonResponse({
+      activated: false,
+      active: false,
+      device_count: verifyRecord.devices.length,
+      max_devices: maxDevices,
+      nonce,
+      hmac: rollbackHMAC,
+      ...(rollbackSig && { ed25519_sig: rollbackSig })
+    }, 200, corsHeaders);
+  }
 
   const action = "activate:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
@@ -434,7 +459,7 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
   const nonce = crypto.randomUUID();
 
   const existing = await env.TRIAL_KV.get(kvKey);
-  let record = existing ? JSON.parse(existing) : { devices: [] };
+  let record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
 
   // Remove this device
   record.devices = record.devices.filter(d => d.fingerprint !== fingerprint);
@@ -475,7 +500,7 @@ async function handleActivationCheck(request, env, corsHeaders) {
   const nonce = crypto.randomUUID();
 
   const existing = await env.TRIAL_KV.get(kvKey);
-  const record = existing ? JSON.parse(existing) : { devices: [] };
+  const record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
 
   const isActive = record.devices.some(d => d.fingerprint === fingerprint);
   const action = isActive ? "check:active" : "check:inactive";
@@ -633,6 +658,14 @@ async function triggerLicenseGeneration(env, params) {
 // ============================================================
 // Helpers
 // ============================================================
+
+function safeJsonParse(str, fallback) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
 
 function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
