@@ -187,7 +187,8 @@ async function handleTrialRegister(request, env, corsHeaders) {
     }, 200, corsHeaders);
   }
 
-  // Register
+  // Register — then re-read to mitigate TOCTOU race (two concurrent
+  // register requests could both see existing=null and both write).
   const registeredAt = new Date().toISOString();
   const record = {
     registered_at: registeredAt,
@@ -196,13 +197,19 @@ async function handleTrialRegister(request, env, corsHeaders) {
   };
   await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
 
+  // Re-read to verify our write won (if another request overwrote us,
+  // the registered_at will differ — accept whatever is stored).
+  const verifyRaw = await env.TRIAL_KV.get(kvKey);
+  const verifyRecord = verifyRaw ? safeJsonParse(verifyRaw, {}) : {};
+  const actualRegisteredAt = verifyRecord.registered_at || registeredAt;
+
   const action = "register:ok";
-  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
-  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, registeredAt, env.RESPONSE_SIGNING_KEY);
+  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, actualRegisteredAt, env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, actualRegisteredAt, env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     allowed: true,
-    registered_at: registeredAt,
+    registered_at: actualRegisteredAt,
     nonce,
     hmac: responseHMAC,
     ...(ed25519Sig && { ed25519_sig: ed25519Sig })
@@ -298,11 +305,11 @@ function timingSafeEqual(a, b) {
 // --- Ed25519 Response Signing ---
 
 async function computeResponseSignature(action, fingerprint, nonce, registeredAt, signingKeyBase64) {
+  // No key configured — signing is intentionally disabled
   if (!signingKeyBase64) return null;
 
   try {
     const keyBytes = Uint8Array.from(atob(signingKeyBase64), c => c.charCodeAt(0));
-    // Import as Ed25519 (PKCS8 format for 32-byte seed)
     // Cloudflare Workers support Ed25519 via crypto.subtle
     const key = await crypto.subtle.importKey(
       "raw",
@@ -316,7 +323,9 @@ async function computeResponseSignature(action, fingerprint, nonce, registeredAt
     const sig = await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(message));
     return btoa(String.fromCharCode(...new Uint8Array(sig)));
   } catch (err) {
-    console.error("Ed25519 signing failed:", err);
+    // Key is configured but invalid — this is a deployment error that must be
+    // caught, not silently swallowed. Log generic message (no secret details).
+    console.error("CRITICAL: RESPONSE_SIGNING_KEY is set but Ed25519 signing failed. Responses will be unsigned. Check key format (must be 32-byte raw seed, base64-encoded).");
     return null;
   }
 }
@@ -351,7 +360,7 @@ async function handleActivationActivate(request, env, corsHeaders) {
     return jsonResponse({ error: "request expired" }, 400, corsHeaders);
   }
 
-  const maxDevices = parseInt(env.MAX_DEVICES || "3");
+  const maxDevices = Math.max(1, Math.min(parseInt(env.MAX_DEVICES || "3") || 3, 100));
   const kvKey = `activation:${license_id}`;
   const nonce = crypto.randomUUID();
 
@@ -495,7 +504,7 @@ async function handleActivationCheck(request, env, corsHeaders) {
     return jsonResponse({ error: "request expired" }, 400, corsHeaders);
   }
 
-  const maxDevices = parseInt(env.MAX_DEVICES || "3");
+  const maxDevices = Math.max(1, Math.min(parseInt(env.MAX_DEVICES || "3") || 3, 100));
   const kvKey = `activation:${license_id}`;
   const nonce = crypto.randomUUID();
 
@@ -553,12 +562,20 @@ async function handleStripeWebhook(request, env) {
 
 async function handleCheckoutCompleted(session, env) {
   const metadata = session.metadata || {};
-  const tier = metadata.tier || "personal";
-  const durationDays = metadata.duration_days || "365";
-  const features = metadata.features || "0";
-  const customerEmail = session.customer_email || session.customer_details?.email || "";
-  const customerName = session.customer_details?.name || "";
-  const nickname = customerName || customerEmail.split("@")[0] || "Customer";
+
+  // Validate Stripe metadata against allowlists before passing to GitHub dispatch
+  const allowedTiers = ["personal", "pro", "team"];
+  const tier = allowedTiers.includes(metadata.tier) ? metadata.tier : "personal";
+
+  const rawDuration = parseInt(metadata.duration_days || "365", 10);
+  const durationDays = String(Number.isFinite(rawDuration) && rawDuration >= 0 && rawDuration <= 3650 ? rawDuration : 365);
+
+  const rawFeatures = parseInt(metadata.features || "0", 10);
+  const features = String(Number.isFinite(rawFeatures) && rawFeatures >= 0 ? rawFeatures : 0);
+
+  const customerEmail = sanitizeField(session.customer_email || session.customer_details?.email || "", 254);
+  const customerName = sanitizeField(session.customer_details?.name || "", 100);
+  const nickname = sanitizeField(customerName || customerEmail.split("@")[0] || "Customer", 100);
 
   await triggerLicenseGeneration(env, {
     tier,
@@ -579,11 +596,15 @@ async function handleInvoicePaid(invoice, env) {
   const metadata = subscription.metadata || {};
   if (!metadata.tier) return;
 
+  // Validate metadata from Stripe
+  const allowedTiers = ["personal", "pro", "team"];
+  if (!allowedTiers.includes(metadata.tier)) return;
+
   const interval = subscription.items?.data?.[0]?.price?.recurring?.interval || "year";
   const durationDays = interval === "month" ? "35" : "370";
-  const customerEmail = invoice.customer_email || "";
-  const nickname = metadata.nickname || customerEmail.split("@")[0] || "Customer";
-  const previousLicenseId = metadata.tessera_license_id || "";
+  const customerEmail = sanitizeField(invoice.customer_email || "", 254);
+  const nickname = sanitizeField(metadata.nickname || customerEmail.split("@")[0] || "Customer", 100);
+  const previousLicenseId = sanitizeField(metadata.tessera_license_id || "", 36);
 
   const renewalWorkflowId = env.GITHUB_RENEWAL_WORKFLOW_ID || "tessera-renew-license.yml";
 
@@ -665,6 +686,18 @@ function safeJsonParse(str, fallback) {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Sanitize a string field: remove control characters and truncate to maxLen.
+ * Prevents injection of newlines, null bytes, and other control chars into
+ * downstream systems (GitHub API, email headers, etc.).
+ */
+function sanitizeField(value, maxLen) {
+  if (typeof value !== "string") return "";
+  // Strip control characters (U+0000–U+001F, U+007F, U+0080–U+009F)
+  const cleaned = value.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+  return cleaned.slice(0, maxLen);
 }
 
 function jsonResponse(data, status = 200, extraHeaders = {}) {

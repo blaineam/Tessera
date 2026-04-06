@@ -169,7 +169,6 @@ jobs:
           now = int(time.time())
           duration_days = int(os.environ["INPUT_DURATION_DAYS"])
           tier = os.environ["INPUT_TIER"]
-          nickname = os.environ["INPUT_NICKNAME"]
           license_id = os.environ["LICENSE_ID"]
           stripe_session_id = os.environ["INPUT_STRIPE_SESSION_ID"]
 
@@ -188,7 +187,6 @@ jobs:
               "tier": tier,
               "issued": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
               "expires": expires,
-              "nickname": nickname,
               "subscription": {
                   "active": bool(stripe_session_id),
                   "interval": interval,

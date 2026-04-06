@@ -77,7 +77,7 @@ struct KeychainStore {
         }
 
         guard status == errSecSuccess else {
-            throw TesseraError.keychainError("Keychain write failed with status \(status)")
+            throw TesseraError.keychainError("Keychain write failed")
         }
     }
 

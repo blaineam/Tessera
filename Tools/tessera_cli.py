@@ -187,6 +187,16 @@ def sign_revocation_list(data: dict, private_key: Ed25519PrivateKey) -> str:
     return base64.b64encode(signature).decode("ascii")
 
 
+def validate_license_id(lid: str) -> bool:
+    """Validate that a license ID is a valid UUID (prevents comma/colon injection
+    in the revocation list canonical format used for signing)."""
+    try:
+        uuid.UUID(lid)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
 def cmd_revoke(args):
     revoked_file = args.revoked_file or "revoked.json"
 
@@ -201,11 +211,18 @@ def cmd_revoke(args):
         data = {"revoked": data, "messages": {}, "updated": ""}
 
     lid = args.license_id
+    if not validate_license_id(lid):
+        print(f"ERROR: Invalid license ID format (must be a valid UUID): {lid}", file=sys.stderr)
+        sys.exit(1)
+
     if lid not in data["revoked"]:
         data["revoked"].append(lid)
 
     if args.message:
-        data["messages"][lid] = args.message
+        # Limit message length and strip control characters to prevent injection
+        msg = args.message[:500]
+        msg = "".join(c for c in msg if c.isprintable() or c == " ")
+        data["messages"][lid] = msg
 
     data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
