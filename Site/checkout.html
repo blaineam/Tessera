@@ -186,12 +186,16 @@ function setPeriod(tier, period) {
     document.getElementById(`${tier}-monthly`).classList.toggle('active', period === 'monthly');
     document.getElementById(`${tier}-yearly`).classList.toggle('active', period === 'yearly');
 
-    // Update price display
+    // Update price display using textContent to avoid innerHTML
     const key = `${tier}_${period}`;
     const priceText = DISPLAY_PRICES[key] || '';
     const parts = priceText.split('/');
-    document.getElementById(`price-${tier}`).innerHTML =
-        `${parts[0]}<span>/${parts[1] || 'year'}</span>`;
+    const priceEl = document.getElementById(`price-${tier}`);
+    priceEl.textContent = '';
+    priceEl.appendChild(document.createTextNode(parts[0]));
+    const spanEl = document.createElement('span');
+    spanEl.textContent = '/' + (parts[1] || 'year');
+    priceEl.appendChild(spanEl);
 }
 
 async function checkout(tier) {
