@@ -5,8 +5,8 @@
 //  Device seat limiting — restricts a license to a maximum number of machines.
 //
 //  Uses the same Cloudflare Worker as the trial registry, with HMAC-authenticated
-//  requests. The server stores activated device fingerprints per license ID and
-//  enforces MAX_DEVICES.
+//  requests and Ed25519-signed responses. The server stores activated device
+//  fingerprints per license ID and enforces MAX_DEVICES.
 //
 //  On first activation, the app must be online. After that, the activation status
 //  is cached locally and re-verified periodically (same cadence as revocation checks).
@@ -16,7 +16,7 @@
 import Foundation
 import CryptoKit
 
-/// Response from the activation server (HMAC-signed).
+/// Response from the activation server (HMAC-signed + optionally Ed25519-signed).
 private struct ActivationResponse: Codable {
     let activated: Bool?
     let deactivated: Bool?
@@ -25,12 +25,14 @@ private struct ActivationResponse: Codable {
     let max_devices: Int?
     let nonce: String
     let hmac: String
+    let ed25519_sig: String?
 }
 
 /// Manages device activation/seat limiting for a license.
 struct ActivationManager {
     private let configuration: TesseraConfiguration
     private let keychain: KeychainStore
+    private let responseVerifier: ResponseSignatureVerifier?
 
     private static let activationStatusKey = "activation_status"
     private static let activationCheckedAtKey = "activation_checked_at"
@@ -39,6 +41,16 @@ struct ActivationManager {
     init(configuration: TesseraConfiguration) {
         self.configuration = configuration
         self.keychain = KeychainStore(appIdentifier: configuration.appIdentifier)
+
+        // Initialize Ed25519 response verifier if a public key is configured
+        if let keyBase64 = configuration.responseVerificationKeyBase64,
+           let keyData = Data(base64Encoded: keyBase64),
+           keyData.count == 32,
+           let pubKey = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData) {
+            self.responseVerifier = ResponseSignatureVerifier(publicKey: pubKey)
+        } else {
+            self.responseVerifier = nil
+        }
     }
 
     /// Whether device activation is enabled (requires registry URL and maxDevices > 0).
@@ -83,7 +95,7 @@ struct ActivationManager {
         switch result {
         case .success(let response):
             let action = (response.activated == true) ? "activate:ok" : "activate:denied"
-            guard verifyResponseHMAC(response: response, fingerprint: fingerprint, action: action) else {
+            guard verifyResponse(response, fingerprint: fingerprint, action: action) else {
                 return .serverUnreachable
             }
 
@@ -125,7 +137,7 @@ struct ActivationManager {
 
         switch result {
         case .success(let response):
-            guard verifyResponseHMAC(response: response, fingerprint: fingerprint, action: "deactivate:ok") else {
+            guard verifyResponse(response, fingerprint: fingerprint, action: "deactivate:ok") else {
                 return .serverUnreachable
             }
             return .deactivated(deviceCount: response.device_count ?? 0)
@@ -165,8 +177,8 @@ struct ActivationManager {
         case .success(let response):
             let isActive = response.active == true
             let action = isActive ? "check:active" : "check:inactive"
-            guard verifyResponseHMAC(response: response, fingerprint: fingerprint, action: action) else {
-                // Bad HMAC — trust cache within grace period
+            guard verifyResponse(response, fingerprint: fingerprint, action: action) else {
+                // Bad signature — trust cache within grace period
                 if let cached = getCachedActivation(licenseID: licenseID), cached.isWithinGracePeriod {
                     return cached.isActive ? .active : .notActive
                 }
@@ -237,6 +249,33 @@ struct ActivationManager {
         keychain.delete(Self.activatedLicenseIDKey)
     }
 
+    // MARK: - Response Verification
+
+    /// Verify a server response using Ed25519 signature (preferred) or HMAC (fallback).
+    private func verifyResponse(_ response: ActivationResponse, fingerprint: String, action: String) -> Bool {
+        // The activation endpoints use empty registeredAt in the HMAC message
+        let message = "\(action):\(fingerprint):\(response.nonce):"
+
+        // Prefer Ed25519 signature verification (asymmetric — can't be forged from client)
+        if let verifier = responseVerifier,
+           let sigBase64 = response.ed25519_sig,
+           let sigData = Data(base64Encoded: sigBase64),
+           let msgData = message.data(using: .utf8) {
+            return verifier.publicKey.isValidSignature(sigData, for: msgData)
+        }
+
+        // Fallback to HMAC verification (symmetric — weaker but still validates)
+        return verifyResponseHMAC(response: response, fingerprint: fingerprint, action: action)
+    }
+
+    private func verifyResponseHMAC(response: ActivationResponse, fingerprint: String, action: String) -> Bool {
+        guard let secret = configuration.trialRegistrySecret else { return false }
+        let message = "\(action):\(fingerprint):\(response.nonce):"
+        let key = SymmetricKey(data: Data(secret.utf8))
+        guard let expectedMAC = Data(base64Encoded: response.hmac) else { return false }
+        return HMAC<SHA256>.isValidAuthenticationCode(expectedMAC, authenticating: Data(message.utf8), using: key)
+    }
+
     // MARK: - Networking
 
     private var hardwareFingerprint: String? {
@@ -293,12 +332,11 @@ struct ActivationManager {
         let mac = HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)
         return Data(mac).base64EncodedString()
     }
+}
 
-    private func verifyResponseHMAC(response: ActivationResponse, fingerprint: String, action: String) -> Bool {
-        guard let secret = configuration.trialRegistrySecret else { return false }
-        let message = "\(action):\(fingerprint):\(response.nonce):"
-        let key = SymmetricKey(data: Data(secret.utf8))
-        guard let expectedMAC = Data(base64Encoded: response.hmac) else { return false }
-        return HMAC<SHA256>.isValidAuthenticationCode(expectedMAC, authenticating: Data(message.utf8), using: key)
-    }
+// MARK: - Ed25519 Response Signature Verifier
+
+/// Verifies Ed25519 signatures on server API responses.
+private struct ResponseSignatureVerifier {
+    let publicKey: Curve25519.Signing.PublicKey
 }

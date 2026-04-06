@@ -388,7 +388,15 @@ function activeApp() {
 (function init() {
     const saved = localStorage.getItem('tessera_config');
     if (saved) {
-        const parsed = JSON.parse(saved);
+        let parsed;
+        try {
+            parsed = JSON.parse(saved);
+        } catch {
+            // Corrupted localStorage — clear and show setup screen
+            localStorage.removeItem('tessera_config');
+            localStorage.removeItem('tessera_signing_key');
+            return;
+        }
 
         // Migrate old single-app config format
         if (!parsed.apps) {
@@ -548,17 +556,17 @@ function renderSettingsAppList() {
         div.style.cssText = 'border:1px solid var(--glass-border);border-radius:8px;padding:12px;margin-bottom:8px;';
         div.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <input type="text" value="${escHtml(app.name)}" data-settings-app-name="${i}" style="font-weight:600;width:40%;">
-                <input type="text" value="${escHtml(app.slug || '')}" data-settings-app-slug="${i}" placeholder="app-slug" style="width:30%;font-size:12px;color:var(--text-dim);">
+                <input type="text" value="${escAttr(app.name)}" data-settings-app-name="${i}" style="font-weight:600;width:40%;">
+                <input type="text" value="${escAttr(app.slug || '')}" data-settings-app-slug="${i}" placeholder="app-slug" style="width:30%;font-size:12px;color:var(--text-dim);">
                 ${config.apps.length > 1 ? `<button class="btn btn-danger btn-sm" onclick="settingsRemoveApp(${i})">Remove</button>` : ''}
             </div>
             <div class="form-group" style="margin-bottom:6px;">
                 <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:2px;">Licenses path</label>
-                <input type="text" value="${escHtml(app.licensesPath)}" data-settings-app-licenses="${i}" style="width:100%;">
+                <input type="text" value="${escAttr(app.licensesPath)}" data-settings-app-licenses="${i}" style="width:100%;">
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label style="display:block;font-size:11px;color:var(--text-dim);margin-bottom:2px;">Revocation path</label>
-                <input type="text" value="${escHtml(app.revokedPath)}" data-settings-app-revoked="${i}" style="width:100%;">
+                <input type="text" value="${escAttr(app.revokedPath)}" data-settings-app-revoked="${i}" style="width:100%;">
             </div>
         `;
         container.appendChild(div);
@@ -607,7 +615,7 @@ function saveSettings() {
 
 // --- GitHub API ---
 async function ghGet(path) {
-    const res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}?ref=${config.branch}`, {
+    const res = await fetch(`https://api.github.com/repos/${encodeURI(config.repo)}/contents/${encodeURI(path)}?ref=${encodeURIComponent(config.branch)}`, {
         headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
     });
     if (!res.ok) {
@@ -624,7 +632,7 @@ async function ghPut(path, content, sha, message) {
         branch: config.branch
     };
     if (sha) body.sha = sha;
-    let res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}`, {
+    let res = await fetch(`https://api.github.com/repos/${encodeURI(config.repo)}/contents/${encodeURI(path)}`, {
         method: 'PUT',
         headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -634,7 +642,7 @@ async function ghPut(path, content, sha, message) {
         const fresh = await ghGet(path);
         if (fresh) {
             body.sha = fresh.sha;
-            res = await fetch(`https://api.github.com/repos/${config.repo}/contents/${path}`, {
+            res = await fetch(`https://api.github.com/repos/${encodeURI(config.repo)}/contents/${encodeURI(path)}`, {
                 method: 'PUT',
                 headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -727,7 +735,7 @@ function renderTable() {
 
     for (const lic of sorted) {
         const status = getStatus(lic);
-        const nick = lic.nickname || '';
+        const nick = escHtml(lic.nickname || '');
         const lid = lic.lid || '';
         if (search && !nick.toLowerCase().includes(search) && !lid.toLowerCase().includes(search) && !(lic.tier||'').toLowerCase().includes(search)) continue;
 
@@ -735,22 +743,33 @@ function renderTable() {
         const badgeClass = { active: 'badge-active', expiring: 'badge-expiring', expired: 'badge-expired', revoked: 'badge-revoked' }[status];
         const expStr = lic.expires === 'perpetual' ? 'Perpetual' : lic.expires ? formatDate(lic.expires) + ' (' + daysUntil(lic.expires) + ')' : '\u2014';
         const subStatus = lic.subscription?.active ? '<span class="badge badge-active">Active</span>' : '<span style="color:var(--text-dim)">\u2014</span>';
-
         tr.innerHTML = `
-            <td><span class="badge ${badgeClass}">${status}</span></td>
-            <td class="mono" style="cursor:pointer;" onclick="copyText('${lid}')" title="Click to copy">${lid.substring(0,8)}...</td>
-            <td><span class="editable" ondblclick="editNickname(this,'${lid}')">${nick || '<span style=color:var(--text-dim)>double-click to set</span>'}</span></td>
-            <td><span class="badge badge-tier">${lic.tier || '\u2014'}</span></td>
+            <td><span class="badge ${badgeClass}">${escHtml(status)}</span></td>
+            <td class="mono" style="cursor:pointer;" title="Click to copy">${escHtml(lid.substring(0,8))}...</td>
+            <td><span class="editable">${nick || '<span style=color:var(--text-dim)>double-click to set</span>'}</span></td>
+            <td><span class="badge badge-tier">${escHtml(lic.tier || '\u2014')}</span></td>
             <td>${lic.issued ? formatDate(lic.issued) : '\u2014'}</td>
             <td>${expStr}</td>
             <td>${subStatus}</td>
-            <td>
-                ${status !== 'revoked'
-                    ? `<button class="btn btn-danger btn-sm" onclick="showRevokeModal('${lid}')">Revoke</button>`
-                    : `<button class="btn btn-sm" onclick="unrevoke('${lid}')">Unrevoke</button>`
-                }
-            </td>
+            <td></td>
         `;
+        // Bind events safely via addEventListener instead of inline onclick (prevents XSS)
+        tr.querySelector('td:nth-child(2)').addEventListener('click', () => copyText(lid));
+        tr.querySelector('.editable').addEventListener('dblclick', function() { editNickname(this, lid); });
+        const actionCell = tr.querySelector('td:last-child');
+        if (status !== 'revoked') {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-danger btn-sm';
+            btn.textContent = 'Revoke';
+            btn.addEventListener('click', () => showRevokeModal(lid));
+            actionCell.appendChild(btn);
+        } else {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm';
+            btn.textContent = 'Unrevoke';
+            btn.addEventListener('click', () => unrevoke(lid));
+            actionCell.appendChild(btn);
+        }
         tbody.appendChild(tr);
     }
 }
@@ -869,7 +888,7 @@ async function dispatchWorkflow(tier, durationDays, nickname, email) {
     const app = activeApp();
     const appSlug = app?.slug || 'default';
     const workflowFile = 'tessera-generate-license.yml';
-    const url = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/dispatches`;
+    const url = `https://api.github.com/repos/${encodeURI(config.repo)}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`;
     const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
@@ -903,7 +922,7 @@ async function pollWorkflowRun(startedAfter) {
         try {
             if (!foundRunId) {
                 // Phase 1: Find our run — look for any run created after dispatch
-                const listUrl = `https://api.github.com/repos/${config.repo}/actions/workflows/${workflowFile}/runs?per_page=10&branch=${config.branch}`;
+                const listUrl = `https://api.github.com/repos/${encodeURI(config.repo)}/actions/workflows/${encodeURIComponent(workflowFile)}/runs?per_page=10&branch=${encodeURIComponent(config.branch)}`;
                 const listRes = await fetch(listUrl, {
                     headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
                 });
@@ -922,7 +941,7 @@ async function pollWorkflowRun(startedAfter) {
                 }
             } else {
                 // Phase 2: We found the run, poll its status
-                const runUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${foundRunId}`;
+                const runUrl = `https://api.github.com/repos/${encodeURI(config.repo)}/actions/runs/${encodeURIComponent(foundRunId)}`;
                 const runRes = await fetch(runUrl, {
                     headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' }
                 });
@@ -946,7 +965,7 @@ async function extractRunResult(run) {
 
     // Try to extract the license key from logs
     try {
-        const logsUrl = `https://api.github.com/repos/${config.repo}/actions/runs/${run.id}/logs`;
+        const logsUrl = `https://api.github.com/repos/${encodeURI(config.repo)}/actions/runs/${encodeURIComponent(run.id)}/logs`;
         const logsRes = await fetch(logsUrl, {
             headers: { Authorization: `token ${config.token}`, Accept: 'application/vnd.github.v3+json' },
             redirect: 'follow'
@@ -1001,12 +1020,14 @@ async function addLicense() {
             const licenseKey = await signLicenseLocal(signingKeyPem, payload);
 
             const nowISO = new Date().toISOString();
+            // Do NOT include the license key or customer email in the entry
+            // that gets committed to the (potentially public) GitHub repo.
+            // The key is shown to the user once via showKeyOutput and emailed separately.
             const entry = {
                 lid, tier,
                 issued: nowISO,
                 expires: durationDays === 0 ? 'perpetual' : new Date(exp * 1000).toISOString(),
-                nickname, key: licenseKey,
-                customer_email: email,
+                nickname,
                 subscription: { active: false, interval: 'yearly', next_renewal: '' },
                 revoked: false
             };
@@ -1046,8 +1067,19 @@ async function addLicense() {
         } else {
             // Couldn't extract key from logs — point user to the run
             document.getElementById('keyOutputText').textContent = 'License key generated — check the workflow run for the key.';
-            document.getElementById('keyOutputMeta').innerHTML =
-                `<a href="${result.runUrl}" target="_blank" style="color:var(--accent);">View workflow run</a>`;
+            const metaEl = document.getElementById('keyOutputMeta');
+            // Validate runUrl is a GitHub URL to prevent javascript: injection
+            if (result.runUrl && /^https:\/\/github\.com\//.test(result.runUrl)) {
+                const link = document.createElement('a');
+                link.href = result.runUrl;
+                link.target = '_blank';
+                link.style.color = 'var(--accent)';
+                link.textContent = 'View workflow run';
+                metaEl.innerHTML = '';
+                metaEl.appendChild(link);
+            } else {
+                metaEl.textContent = 'Check GitHub Actions for the workflow run.';
+            }
             document.getElementById('keyOutputModal').classList.add('active');
         }
 
@@ -1065,10 +1097,10 @@ async function addLicense() {
 function showKeyOutput(licenseKey, lid, tier, durationDays, email) {
     document.getElementById('keyOutputText').textContent = licenseKey;
     let meta = '';
-    if (lid) meta += `<strong>ID:</strong> ${lid}<br>`;
-    meta += `<strong>Tier:</strong> ${tier}<br>`;
-    meta += `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : durationDays + ' days'}<br>`;
-    if (email) meta += `<strong>Emailed to:</strong> ${email}`;
+    if (lid) meta += `<strong>ID:</strong> ${escHtml(lid)}<br>`;
+    meta += `<strong>Tier:</strong> ${escHtml(tier)}<br>`;
+    meta += `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : escHtml(String(durationDays)) + ' days'}<br>`;
+    if (email) meta += `<strong>Emailed to:</strong> ${escHtml(email)}`;
     document.getElementById('keyOutputMeta').innerHTML = meta;
     document.getElementById('keyOutputModal').classList.add('active');
 }
@@ -1170,7 +1202,8 @@ async function editNickname(el, lid) {
 function formatDate(iso) {
     if (!iso) return '\u2014';
     const d = new Date(iso);
-    return isNaN(d) ? iso : d.toLocaleDateString('en', { year: 'numeric', month: 'short', day: 'numeric' });
+    // Return escaped string if date parsing fails to prevent HTML injection via crafted expires field
+    return isNaN(d) ? escHtml(String(iso)) : d.toLocaleDateString('en', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function daysUntil(iso) {
@@ -1191,6 +1224,10 @@ function escHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function escAttr(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function toast(msg, type = 'success') {

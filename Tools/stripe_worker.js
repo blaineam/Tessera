@@ -26,6 +26,8 @@
  *   GITHUB_WORKFLOW_ID     — e.g. "tessera-generate-license.yml"
  *   TRIAL_SECRET           — Shared secret for trial + activation API authentication
  *   MAX_DEVICES            — Maximum devices per license (default: 3)
+ *   ALLOWED_ORIGIN         — Allowed CORS origin (default: none — native apps don't need CORS)
+ *   RESPONSE_SIGNING_KEY   — Ed25519 private key (base64, 32 bytes) for signing API responses
  *
  * KV Namespace binding:
  *   TRIAL_KV               — Cloudflare KV namespace for trial + activation records
@@ -38,14 +40,21 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // CORS headers for the trial API (called from the app)
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    };
+    // CORS headers — restricted to configured origin (native apps don't need CORS)
+    const allowedOrigin = env.ALLOWED_ORIGIN || "";
+    const requestOrigin = request.headers.get("Origin") || "";
+    const corsHeaders = {};
+
+    if (allowedOrigin && requestOrigin === allowedOrigin) {
+      corsHeaders["Access-Control-Allow-Origin"] = allowedOrigin;
+      corsHeaders["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+      corsHeaders["Access-Control-Allow-Headers"] = "Content-Type";
+    }
 
     if (request.method === "OPTIONS") {
+      if (!allowedOrigin || requestOrigin !== allowedOrigin) {
+        return new Response(null, { status: 403 });
+      }
       return new Response(null, { headers: corsHeaders });
     }
 
@@ -53,6 +62,19 @@ export default {
       // --- Health ---
       if (url.pathname === "/health") {
         return jsonResponse({ status: "ok", service: "tessera" }, 200, corsHeaders);
+      }
+
+      // --- Rate limiting (basic per-IP) ---
+      const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+      const rateLimitResult = await checkRateLimit(env, clientIP, url.pathname);
+      if (!rateLimitResult.allowed) {
+        return jsonResponse({ error: "rate limit exceeded" }, 429, corsHeaders);
+      }
+
+      // --- Request body size limit (64KB max for API endpoints) ---
+      const contentLength = parseInt(request.headers.get("Content-Length") || "0");
+      if (contentLength > 65536) {
+        return jsonResponse({ error: "request too large" }, 413, corsHeaders);
       }
 
       // --- Trial Registration ---
@@ -86,10 +108,32 @@ export default {
       return new Response("Not found", { status: 404 });
     } catch (err) {
       console.error("Worker error:", err);
-      return jsonResponse({ error: err.message }, 500, corsHeaders);
+      return jsonResponse({ error: "internal error" }, 500, corsHeaders);
     }
   }
 };
+
+// ============================================================
+// Rate Limiting (basic per-IP using KV with TTL)
+// ============================================================
+
+async function checkRateLimit(env, clientIP, pathname) {
+  // Rate limit: 30 requests per minute per IP for trial/activation endpoints
+  if (!pathname.startsWith("/trial/") && !pathname.startsWith("/activation/")) {
+    return { allowed: true };
+  }
+
+  const key = `ratelimit:${clientIP}:${Math.floor(Date.now() / 60000)}`;
+  const current = parseInt(await env.TRIAL_KV.get(key)) || 0;
+
+  if (current >= 30) {
+    return { allowed: false };
+  }
+
+  // Increment (TTL of 120 seconds ensures cleanup)
+  await env.TRIAL_KV.put(key, String(current + 1), { expirationTtl: 120 });
+  return { allowed: true };
+}
 
 // ============================================================
 // Trial Registry (HMAC-authenticated, MITM-resistant)
@@ -101,14 +145,22 @@ export default {
 // Request:  {fingerprint, app_id, timestamp, request_hmac}
 //   request_hmac = HMAC(secret, fingerprint + ":" + app_id + ":" + timestamp)
 //
-// Response: {used/allowed, registered_at, nonce, hmac}
+// Response: {used/allowed, registered_at, nonce, hmac, ed25519_sig}
 //   hmac = HMAC(secret, action + ":" + fingerprint + ":" + nonce + ":" + registered_at)
+//   ed25519_sig = Ed25519(private_key, action + ":" + fingerprint + ":" + nonce + ":" + registered_at)
 //
-// Even with full TLS interception:
-// - Attacker sees HMACs but can't extract the secret (one-way)
-// - Attacker can't forge a valid response without the secret
-// - Random nonce in response prevents replaying old valid responses
-// - Timestamp in request prevents replaying old requests (5-min window)
+// The Ed25519 signature provides asymmetric verification — the client can verify
+// responses using the public key without the private key ever being in the binary.
+
+// Validate fingerprint format (hex-encoded SHA-256 hash)
+function isValidFingerprint(fp) {
+  return typeof fp === "string" && /^[0-9a-f]{16,64}$/i.test(fp);
+}
+
+// Validate app_id format (bundle identifier style)
+function isValidAppId(id) {
+  return typeof id === "string" && /^[a-zA-Z0-9._-]{1,256}$/.test(id);
+}
 
 async function handleTrialRegister(request, env, corsHeaders) {
   const body = await request.json();
@@ -116,6 +168,10 @@ async function handleTrialRegister(request, env, corsHeaders) {
 
   if (!fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
   }
 
   // Verify request HMAC (proves the app knows the secret)
@@ -136,20 +192,23 @@ async function handleTrialRegister(request, env, corsHeaders) {
   // Check if already registered
   const existing = await env.TRIAL_KV.get(kvKey);
   if (existing) {
-    const record = JSON.parse(existing);
+    const record = safeJsonParse(existing, {});
     const registeredAt = record.registered_at;
     const action = "register:denied";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, registeredAt, env.RESPONSE_SIGNING_KEY);
 
     return jsonResponse({
       allowed: false,
       registered_at: registeredAt,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
-  // Register
+  // Register — then re-read to mitigate TOCTOU race (two concurrent
+  // register requests could both see existing=null and both write).
   const registeredAt = new Date().toISOString();
   const record = {
     registered_at: registeredAt,
@@ -158,14 +217,22 @@ async function handleTrialRegister(request, env, corsHeaders) {
   };
   await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
 
+  // Re-read to verify our write won (if another request overwrote us,
+  // the registered_at will differ — accept whatever is stored).
+  const verifyRaw = await env.TRIAL_KV.get(kvKey);
+  const verifyRecord = verifyRaw ? safeJsonParse(verifyRaw, {}) : {};
+  const actualRegisteredAt = verifyRecord.registered_at || registeredAt;
+
   const action = "register:ok";
-  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
+  const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, actualRegisteredAt, env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, actualRegisteredAt, env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     allowed: true,
-    registered_at: registeredAt,
+    registered_at: actualRegisteredAt,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -175,6 +242,10 @@ async function handleTrialCheck(request, env, corsHeaders) {
 
   if (!fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
   }
 
   // Verify request HMAC
@@ -194,26 +265,30 @@ async function handleTrialCheck(request, env, corsHeaders) {
   const nonce = crypto.randomUUID();
 
   if (existing) {
-    const record = JSON.parse(existing);
+    const record = safeJsonParse(existing, {});
     const registeredAt = record.registered_at;
     const action = "check:used";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, registeredAt, env.RESPONSE_SIGNING_KEY);
 
     return jsonResponse({
       used: true,
       registered_at: registeredAt,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
   const action = "check:fresh";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     used: false,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -243,12 +318,42 @@ async function computeHMAC(message, secret) {
 }
 
 function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  // Avoid early return on length mismatch to prevent timing oracle.
+  // Always iterate over the longer string to keep comparison time constant.
+  const len = Math.max(a.length, b.length);
+  let mismatch = a.length ^ b.length; // non-zero if lengths differ
+  for (let i = 0; i < len; i++) {
+    mismatch |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return mismatch === 0;
+}
+
+// --- Ed25519 Response Signing ---
+
+async function computeResponseSignature(action, fingerprint, nonce, registeredAt, signingKeyBase64) {
+  // No key configured — signing is intentionally disabled
+  if (!signingKeyBase64) return null;
+
+  try {
+    const keyBytes = Uint8Array.from(atob(signingKeyBase64), c => c.charCodeAt(0));
+    // Cloudflare Workers support Ed25519 via crypto.subtle
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyBytes,
+      { name: "Ed25519" },
+      false,
+      ["sign"]
+    );
+
+    const message = `${action}:${fingerprint}:${nonce}:${registeredAt}`;
+    const sig = await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(message));
+    return btoa(String.fromCharCode(...new Uint8Array(sig)));
+  } catch (err) {
+    // Key is configured but invalid — this is a deployment error that must be
+    // caught, not silently swallowed. Log generic message (no secret details).
+    console.error("CRITICAL: RESPONSE_SIGNING_KEY is set but Ed25519 signing failed. Responses will be unsigned. Check key format (must be 32-byte raw seed, base64-encoded).");
+    return null;
+  }
 }
 
 // ============================================================
@@ -263,12 +368,25 @@ function timingSafeEqual(a, b) {
 //
 // Uses the same HMAC authentication as the trial registry.
 
+// Validate license_id format (UUID-like) to prevent KV key injection
+function isValidLicenseId(id) {
+  return typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
 async function handleActivationActivate(request, env, corsHeaders) {
   const body = await request.json();
   const { license_id, fingerprint, app_id, timestamp, request_hmac } = body;
 
   if (!license_id || !fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidLicenseId(license_id)) {
+    return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
   }
 
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
@@ -281,26 +399,29 @@ async function handleActivationActivate(request, env, corsHeaders) {
     return jsonResponse({ error: "request expired" }, 400, corsHeaders);
   }
 
-  const maxDevices = parseInt(env.MAX_DEVICES || "3");
+  const maxDevices = Math.max(1, Math.min(parseInt(env.MAX_DEVICES || "3") || 3, 100));
   const kvKey = `activation:${license_id}`;
   const nonce = crypto.randomUUID();
 
   // Load existing activation record
   const existing = await env.TRIAL_KV.get(kvKey);
-  let record = existing ? JSON.parse(existing) : { devices: [] };
+  let record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
+  if (!Array.isArray(record.devices)) record.devices = [];
 
   // Check if this device is already activated
   const alreadyActive = record.devices.some(d => d.fingerprint === fingerprint);
   if (alreadyActive) {
     const action = "activate:ok";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
     return jsonResponse({
       activated: true,
       active: true,
       device_count: record.devices.length,
       max_devices: maxDevices,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
@@ -308,31 +429,59 @@ async function handleActivationActivate(request, env, corsHeaders) {
   if (record.devices.length >= maxDevices) {
     const action = "activate:denied";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
     return jsonResponse({
       activated: false,
       active: false,
       device_count: record.devices.length,
       max_devices: maxDevices,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
-  // Activate this device
+  // Activate this device.
+  // Re-read after write to mitigate TOCTOU race where two concurrent requests
+  // could both pass the device limit check. If another request snuck in and
+  // we now exceed the limit, roll back.
   record.devices.push({
     fingerprint,
     activated_at: new Date().toISOString()
   });
   await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
 
+  // Verify we didn't exceed the limit due to a race
+  const verifyRaw = await env.TRIAL_KV.get(kvKey);
+  const verifyRecord = verifyRaw ? safeJsonParse(verifyRaw, { devices: [] }) : { devices: [] };
+  if ((verifyRecord.devices || []).length > maxDevices) {
+    // Race condition — roll back this activation
+    verifyRecord.devices = (verifyRecord.devices || []).filter(d => d.fingerprint !== fingerprint);
+    await env.TRIAL_KV.put(kvKey, JSON.stringify(verifyRecord));
+    const rollbackAction = "activate:denied";
+    const rollbackHMAC = await computeResponseHMAC(rollbackAction, fingerprint, nonce, "", env.TRIAL_SECRET);
+    const rollbackSig = await computeResponseSignature(rollbackAction, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
+    return jsonResponse({
+      activated: false,
+      active: false,
+      device_count: verifyRecord.devices.length,
+      max_devices: maxDevices,
+      nonce,
+      hmac: rollbackHMAC,
+      ...(rollbackSig && { ed25519_sig: rollbackSig })
+    }, 200, corsHeaders);
+  }
+
   const action = "activate:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
   return jsonResponse({
     activated: true,
     device_count: record.devices.length,
     max_devices: maxDevices,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -344,6 +493,14 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
   }
 
+  if (!isValidLicenseId(license_id)) {
+    return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
+  }
+
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
   if (!validRequest) {
     return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
@@ -358,19 +515,33 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
   const nonce = crypto.randomUUID();
 
   const existing = await env.TRIAL_KV.get(kvKey);
-  let record = existing ? JSON.parse(existing) : { devices: [] };
+  let record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
+  if (!Array.isArray(record.devices)) record.devices = [];
 
   // Remove this device
   record.devices = record.devices.filter(d => d.fingerprint !== fingerprint);
   await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
 
+  // Re-read to confirm deactivation took effect (TOCTOU mitigation)
+  const verifyRaw = await env.TRIAL_KV.get(kvKey);
+  const verifyRecord = verifyRaw ? safeJsonParse(verifyRaw, { devices: [] }) : { devices: [] };
+  const stillActive = (verifyRecord.devices || []).some(d => d.fingerprint === fingerprint);
+  if (stillActive) {
+    // Race condition — retry removal
+    verifyRecord.devices = (verifyRecord.devices || []).filter(d => d.fingerprint !== fingerprint);
+    await env.TRIAL_KV.put(kvKey, JSON.stringify(verifyRecord));
+  }
+
+  const finalDeviceCount = stillActive ? verifyRecord.devices.length : record.devices.length;
   const action = "deactivate:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
   return jsonResponse({
     deactivated: true,
-    device_count: record.devices.length,
+    device_count: finalDeviceCount,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -382,6 +553,14 @@ async function handleActivationCheck(request, env, corsHeaders) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
   }
 
+  if (!isValidLicenseId(license_id)) {
+    return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
+  }
+
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
   if (!validRequest) {
     return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
@@ -392,23 +571,25 @@ async function handleActivationCheck(request, env, corsHeaders) {
     return jsonResponse({ error: "request expired" }, 400, corsHeaders);
   }
 
-  const maxDevices = parseInt(env.MAX_DEVICES || "3");
+  const maxDevices = Math.max(1, Math.min(parseInt(env.MAX_DEVICES || "3") || 3, 100));
   const kvKey = `activation:${license_id}`;
   const nonce = crypto.randomUUID();
 
   const existing = await env.TRIAL_KV.get(kvKey);
-  const record = existing ? JSON.parse(existing) : { devices: [] };
+  const record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
 
   const isActive = record.devices.some(d => d.fingerprint === fingerprint);
   const action = isActive ? "check:active" : "check:inactive";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     active: isActive,
     device_count: record.devices.length,
     max_devices: maxDevices,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -448,12 +629,24 @@ async function handleStripeWebhook(request, env) {
 
 async function handleCheckoutCompleted(session, env) {
   const metadata = session.metadata || {};
-  const tier = metadata.tier || "personal";
-  const durationDays = metadata.duration_days || "365";
-  const features = metadata.features || "0";
-  const customerEmail = session.customer_email || session.customer_details?.email || "";
-  const customerName = session.customer_details?.name || "";
-  const nickname = customerName || customerEmail.split("@")[0] || "Customer";
+
+  // Validate Stripe metadata against allowlists before passing to GitHub dispatch
+  const allowedTiers = ["personal", "pro", "team"];
+  const tier = allowedTiers.includes(metadata.tier) ? metadata.tier : "personal";
+
+  const rawDuration = parseInt(metadata.duration_days || "365", 10);
+  const durationDays = String(Number.isFinite(rawDuration) && rawDuration >= 0 && rawDuration <= 3650 ? rawDuration : 365);
+
+  const rawFeatures = parseInt(metadata.features || "0", 10);
+  const features = String(Number.isFinite(rawFeatures) && rawFeatures >= 0 ? rawFeatures : 0);
+
+  const customerEmail = sanitizeField(session.customer_email || session.customer_details?.email || "", 254);
+  const customerName = sanitizeField(session.customer_details?.name || "", 100);
+  const nickname = sanitizeField(customerName || customerEmail.split("@")[0] || "Customer", 100);
+
+  // Validate Stripe IDs before passing to workflow dispatch (defense-in-depth)
+  const stripeSessionId = isValidStripeId(session.id, "cs") ? session.id : "";
+  const stripeCustomerId = isValidStripeId(session.customer, "cus") ? session.customer : "";
 
   await triggerLicenseGeneration(env, {
     tier,
@@ -461,26 +654,50 @@ async function handleCheckoutCompleted(session, env) {
     features,
     nickname,
     customer_email: customerEmail,
-    stripe_session_id: session.id,
-    stripe_customer_id: session.customer || ""
+    stripe_session_id: stripeSessionId,
+    stripe_customer_id: stripeCustomerId
   });
+}
+
+// Validate a Stripe resource ID format (e.g. sub_xxx, cus_xxx) to prevent URL path injection
+function isValidStripeId(id, prefix) {
+  return typeof id === "string" && new RegExp(`^${prefix}_[A-Za-z0-9]+$`).test(id);
+}
+
+// Validate GitHub repo format (owner/repo) to prevent URL injection
+function isValidGitHubRepo(repo) {
+  return typeof repo === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo);
+}
+
+// Validate workflow ID format to prevent URL injection
+function isValidWorkflowId(id) {
+  return typeof id === "string" && /^[A-Za-z0-9_.-]+$/.test(id);
 }
 
 async function handleInvoicePaid(invoice, env) {
   if (!invoice.subscription) return;
   if (invoice.billing_reason === "subscription_create") return;
 
+  // Validate subscription ID format before using in URL path
+  if (!isValidStripeId(invoice.subscription, "sub")) return;
+
   const subscription = await stripeGet(`/v1/subscriptions/${invoice.subscription}`, env.STRIPE_SECRET_KEY);
   const metadata = subscription.metadata || {};
   if (!metadata.tier) return;
 
+  // Validate metadata from Stripe
+  const allowedTiers = ["personal", "pro", "team"];
+  if (!allowedTiers.includes(metadata.tier)) return;
+
   const interval = subscription.items?.data?.[0]?.price?.recurring?.interval || "year";
   const durationDays = interval === "month" ? "35" : "370";
-  const customerEmail = invoice.customer_email || "";
-  const nickname = metadata.nickname || customerEmail.split("@")[0] || "Customer";
-  const previousLicenseId = metadata.tessera_license_id || "";
+  const customerEmail = sanitizeField(invoice.customer_email || "", 254);
+  const nickname = sanitizeField(metadata.nickname || customerEmail.split("@")[0] || "Customer", 100);
+  const previousLicenseId = sanitizeField(metadata.tessera_license_id || "", 36);
 
   const renewalWorkflowId = env.GITHUB_RENEWAL_WORKFLOW_ID || "tessera-renew-license.yml";
+
+  if (!isValidGitHubRepo(env.GITHUB_REPO) || !isValidWorkflowId(renewalWorkflowId)) return;
 
   await fetch(
     `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${renewalWorkflowId}/dispatches`,
@@ -498,11 +715,11 @@ async function handleInvoicePaid(invoice, env) {
           previous_license_id: previousLicenseId,
           tier: metadata.tier,
           duration_days: durationDays,
-          features: metadata.features || "0",
+          features: /^\d+$/.test(metadata.features) ? metadata.features : "0",
           nickname,
           customer_email: customerEmail,
           stripe_subscription_id: invoice.subscription,
-          stripe_customer_id: invoice.customer || ""
+          stripe_customer_id: isValidStripeId(invoice.customer, "cus") ? invoice.customer : ""
         }
       })
     }
@@ -512,13 +729,20 @@ async function handleInvoicePaid(invoice, env) {
 async function handleSubscriptionCanceled(subscription, env) {
   const metadata = subscription.metadata || {};
   if (metadata.license_id && metadata.auto_revoke === "true") {
-    console.log(`Subscription canceled, would auto-revoke ${metadata.license_id}`);
+    // Validate license_id format before logging to prevent log injection
+    if (isValidLicenseId(metadata.license_id)) {
+      console.log(`Subscription canceled, would auto-revoke ${metadata.license_id}`);
+    }
   }
 }
 
 // --- GitHub Action Trigger ---
 
 async function triggerLicenseGeneration(env, params) {
+  if (!isValidGitHubRepo(env.GITHUB_REPO) || !isValidWorkflowId(env.GITHUB_WORKFLOW_ID)) {
+    throw new Error("Invalid GITHUB_REPO or GITHUB_WORKFLOW_ID configuration");
+  }
+
   const response = await fetch(
     `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW_ID}/dispatches`,
     {
@@ -546,13 +770,33 @@ async function triggerLicenseGeneration(env, params) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`GitHub API ${response.status}: ${text}`);
+    throw new Error(`GitHub API error: ${response.status}`);
   }
 }
 
 // ============================================================
 // Helpers
 // ============================================================
+
+function safeJsonParse(str, fallback) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Sanitize a string field: remove control characters and truncate to maxLen.
+ * Prevents injection of newlines, null bytes, and other control chars into
+ * downstream systems (GitHub API, email headers, etc.).
+ */
+function sanitizeField(value, maxLen) {
+  if (typeof value !== "string") return "";
+  // Strip control characters (U+0000–U+001F, U+007F, U+0080–U+009F)
+  const cleaned = value.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+  return cleaned.slice(0, maxLen);
+}
 
 function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
@@ -604,10 +848,11 @@ async function verifyStripeWebhook(payload, sigHeader, secret) {
     .map(b => b.toString(16).padStart(2, "0"))
     .join("");
 
-  if (expectedSig.length !== signature.length) return null;
-  let mismatch = 0;
-  for (let i = 0; i < expectedSig.length; i++) {
-    mismatch |= expectedSig.charCodeAt(i) ^ signature.charCodeAt(i);
+  // Constant-time comparison: avoid early return on length mismatch
+  const sigLen = Math.max(expectedSig.length, signature.length);
+  let mismatch = expectedSig.length ^ signature.length;
+  for (let i = 0; i < sigLen; i++) {
+    mismatch |= (expectedSig.charCodeAt(i) || 0) ^ (signature.charCodeAt(i) || 0);
   }
   if (mismatch !== 0) return null;
 

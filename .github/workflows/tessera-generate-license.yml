@@ -58,7 +58,42 @@ permissions:
 jobs:
   generate-license:
     runs-on: ubuntu-latest
+    # Pass all inputs via environment variables to prevent script injection
+    env:
+      INPUT_APP: ${{ inputs.app }}
+      INPUT_TIER: ${{ inputs.tier }}
+      INPUT_DURATION_DAYS: ${{ inputs.duration_days }}
+      INPUT_FEATURES: ${{ inputs.features }}
+      INPUT_NICKNAME: ${{ inputs.nickname }}
+      INPUT_CUSTOMER_EMAIL: ${{ inputs.customer_email }}
+      INPUT_STRIPE_SESSION_ID: ${{ inputs.stripe_session_id }}
+      INPUT_STRIPE_CUSTOMER_ID: ${{ inputs.stripe_customer_id }}
     steps:
+      - name: Validate inputs
+        run: |
+          # Validate features is a non-negative integer
+          if ! echo "$INPUT_FEATURES" | grep -qE '^[0-9]+$'; then
+            echo "::error::features must be a non-negative integer, got: $INPUT_FEATURES"
+            exit 1
+          fi
+          # Validate duration_days is a non-negative integer
+          if ! echo "$INPUT_DURATION_DAYS" | grep -qE '^[0-9]+$'; then
+            echo "::error::duration_days must be a non-negative integer"
+            exit 1
+          fi
+          # Validate nickname doesn't contain dangerous characters
+          if echo "$INPUT_NICKNAME" | grep -qE '["`$\\]'; then
+            echo "::error::nickname contains disallowed characters"
+            exit 1
+          fi
+          # Validate Stripe customer ID format (if provided) to prevent URL injection
+          if [ -n "$INPUT_STRIPE_CUSTOMER_ID" ]; then
+            if ! echo "$INPUT_STRIPE_CUSTOMER_ID" | grep -qE '^cus_[A-Za-z0-9]+$'; then
+              echo "::error::stripe_customer_id has invalid format"
+              exit 1
+            fi
+          fi
+
       - name: Checkout this repo
         uses: actions/checkout@v4
 
@@ -73,7 +108,7 @@ jobs:
       - name: Resolve per-app private key
         id: appconfig
         run: |
-          APP="${{ inputs.app }}"
+          APP="$INPUT_APP"
           # Map app name to uppercase for secret lookup
           APP_UPPER=$(echo "$APP" | tr '[:lower:]-' '[:upper:]_')
 
@@ -82,16 +117,17 @@ jobs:
           echo "app_upper=${APP_UPPER}" >> "$GITHUB_OUTPUT"
 
       - name: Write private key to temp file
+        env:
+          KEY_APP_SPECIFIC: ${{ secrets[format('TESSERA_PRIVATE_KEY_{0}', steps.appconfig.outputs.app_upper)] }}
+          KEY_SHARED: ${{ secrets.TESSERA_PRIVATE_KEY }}
         run: |
           TMPKEY="$(mktemp)"
-          # Try app-specific key first (TESSERA_PRIVATE_KEY_ARI), fall back to shared key
-          APP_UPPER="${{ steps.appconfig.outputs.app_upper }}"
-          KEY_VALUE="${{ secrets[format('TESSERA_PRIVATE_KEY_{0}', steps.appconfig.outputs.app_upper)] }}"
+          KEY_VALUE="${KEY_APP_SPECIFIC}"
           if [ -z "$KEY_VALUE" ]; then
-            KEY_VALUE="${{ secrets.TESSERA_PRIVATE_KEY }}"
+            KEY_VALUE="${KEY_SHARED}"
           fi
           if [ -z "$KEY_VALUE" ]; then
-            echo "::error::No private key found for app '${{ inputs.app }}'. Set TESSERA_PRIVATE_KEY_${APP_UPPER} or TESSERA_PRIVATE_KEY in repo secrets."
+            echo "::error::No private key found for app '$INPUT_APP'. Set TESSERA_PRIVATE_KEY_${{ steps.appconfig.outputs.app_upper }} or TESSERA_PRIVATE_KEY in repo secrets."
             exit 1
           fi
           echo "$KEY_VALUE" > "$TMPKEY"
@@ -101,29 +137,30 @@ jobs:
       - name: Generate license key
         id: generate
         run: |
-          DURATION_DAYS="${{ inputs.duration_days }}"
-
-          if [ "$DURATION_DAYS" = "0" ]; then
+          if [ "$INPUT_DURATION_DAYS" = "0" ]; then
             GENERATE_ARGS="--perpetual"
           else
-            GENERATE_ARGS="--duration $DURATION_DAYS"
+            GENERATE_ARGS="--duration $INPUT_DURATION_DAYS"
           fi
 
           OUTPUT=$(python3 Tools/tessera_cli.py generate \
             --private-key "$TMPKEY" \
-            --tier "${{ inputs.tier }}" \
-            --features "${{ inputs.features }}" \
+            --tier "$INPUT_TIER" \
+            --features "$INPUT_FEATURES" \
             $GENERATE_ARGS)
-
-          echo "$OUTPUT"
 
           LICENSE_KEY=$(echo "$OUTPUT" | grep "^License Key:" | sed 's/^License Key: *//')
           LICENSE_ID=$(echo "$OUTPUT" | grep "^License ID:" | sed 's/^License ID: *//')
+
+          # Mask the license key so it never appears in logs
+          echo "::add-mask::$LICENSE_KEY"
 
           echo "license_key=$LICENSE_KEY" >> "$GITHUB_OUTPUT"
           echo "license_id=$LICENSE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Update licenses.json
+        env:
+          LICENSE_ID: ${{ steps.generate.outputs.license_id }}
         run: |
           LICENSES_FILE="${{ steps.appconfig.outputs.data_path }}/licenses.json"
 
@@ -133,11 +170,14 @@ jobs:
           fi
 
           python3 - "$LICENSES_FILE" <<'PYEOF'
-          import json, sys, time
+          import json, sys, time, os
 
           licenses_file = sys.argv[1]
           now = int(time.time())
-          duration_days = int("${{ inputs.duration_days }}")
+          duration_days = int(os.environ["INPUT_DURATION_DAYS"])
+          tier = os.environ["INPUT_TIER"]
+          license_id = os.environ["LICENSE_ID"]
+          stripe_session_id = os.environ["INPUT_STRIPE_SESSION_ID"]
 
           with open(licenses_file, "r") as f:
               data = json.load(f)
@@ -150,15 +190,12 @@ jobs:
           interval = "yearly" if duration_days >= 365 else ("monthly" if duration_days <= 35 else "custom")
 
           entry = {
-              "lid": "${{ steps.generate.outputs.license_id }}",
-              "tier": "${{ inputs.tier }}",
+              "lid": license_id,
+              "tier": tier,
               "issued": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
               "expires": expires,
-              "nickname": "${{ inputs.nickname }}",
-              "customer_email": "${{ inputs.customer_email }}",
-              "stripe_customer_id": "${{ inputs.stripe_customer_id }}",
               "subscription": {
-                  "active": bool("${{ inputs.stripe_session_id }}"),
+                  "active": bool(stripe_session_id),
                   "interval": interval,
                   "next_renewal": expires
               },
@@ -178,11 +215,11 @@ jobs:
           git config user.email "tessera[bot]@users.noreply.github.com"
           git add "${{ steps.appconfig.outputs.data_path }}/licenses.json"
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Tessera: add ${{ inputs.tier }} license for ${{ inputs.app }} (${{ steps.generate.outputs.license_id }})"
+          git commit -m "Tessera: add $INPUT_TIER license for $INPUT_APP (${{ steps.generate.outputs.license_id }})"
           git push
 
       - name: Send license via email
-        if: inputs.customer_email != ''
+        if: env.INPUT_CUSTOMER_EMAIL != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -211,14 +248,15 @@ jobs:
             Powered by Tessera
 
       - name: Update Stripe metadata with license ID
-        if: inputs.stripe_customer_id != ''
+        if: env.INPUT_STRIPE_CUSTOMER_ID != ''
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
         run: |
-          # Store the license ID in the Stripe customer metadata for future reference
-          if [ -n "${{ secrets.STRIPE_SECRET_KEY }}" ]; then
-            curl -s -X POST "https://api.stripe.com/v1/customers/${{ inputs.stripe_customer_id }}" \
-              -u "${{ secrets.STRIPE_SECRET_KEY }}:" \
+          if [ -n "$STRIPE_SECRET_KEY" ]; then
+            curl -s -X POST "https://api.stripe.com/v1/customers/$INPUT_STRIPE_CUSTOMER_ID" \
+              -u "$STRIPE_SECRET_KEY:" \
               -d "metadata[tessera_license_id]=${{ steps.generate.outputs.license_id }}" \
-              -d "metadata[tessera_tier]=${{ inputs.tier }}" || true
+              -d "metadata[tessera_tier]=$INPUT_TIER" || true
           fi
 
       - name: Write summary
@@ -228,22 +266,14 @@ jobs:
 
           | Field | Value |
           |-------|-------|
-          | **App** | ${{ inputs.app }} |
+          | **App** | $INPUT_APP |
           | **License ID** | \`${{ steps.generate.outputs.license_id }}\` |
-          | **Tier** | ${{ inputs.tier }} |
-          | **Duration** | ${{ inputs.duration_days == '0' && 'Perpetual' || format('{0} days', inputs.duration_days) }} |
-          | **Features** | ${{ inputs.features }} |
-          | **Nickname** | ${{ inputs.nickname }} |
-          | **Email** | ${{ inputs.customer_email || '(none)' }} |
-          | **Stripe** | ${{ inputs.stripe_session_id || '(manual)' }} |
+          | **Tier** | $INPUT_TIER |
+          | **Duration** | ${INPUT_DURATION_DAYS} days |
+          | **Features** | $INPUT_FEATURES |
+          | **Nickname** | $INPUT_NICKNAME |
 
-          ### License Key
-
-          \`\`\`
-          ${{ steps.generate.outputs.license_key }}
-          \`\`\`
-
-          > Copy this key and provide it to the end user.
+          > License key was delivered via email (if configured) and masked from logs.
           EOF
 
       - name: Clean up private key
