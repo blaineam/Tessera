@@ -71,6 +71,12 @@ export default {
         return jsonResponse({ error: "rate limit exceeded" }, 429, corsHeaders);
       }
 
+      // --- Request body size limit (64KB max for API endpoints) ---
+      const contentLength = parseInt(request.headers.get("Content-Length") || "0");
+      if (contentLength > 65536) {
+        return jsonResponse({ error: "request too large" }, 413, corsHeaders);
+      }
+
       // --- Trial Registration ---
       if (url.pathname === "/trial/register" && request.method === "POST") {
         return await handleTrialRegister(request, env, corsHeaders);
@@ -146,12 +152,26 @@ async function checkRateLimit(env, clientIP, pathname) {
 // The Ed25519 signature provides asymmetric verification — the client can verify
 // responses using the public key without the private key ever being in the binary.
 
+// Validate fingerprint format (hex-encoded SHA-256 hash)
+function isValidFingerprint(fp) {
+  return typeof fp === "string" && /^[0-9a-f]{16,64}$/i.test(fp);
+}
+
+// Validate app_id format (bundle identifier style)
+function isValidAppId(id) {
+  return typeof id === "string" && /^[a-zA-Z0-9._-]{1,256}$/.test(id);
+}
+
 async function handleTrialRegister(request, env, corsHeaders) {
   const body = await request.json();
   const { fingerprint, app_id, timestamp, request_hmac } = body;
 
   if (!fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
   }
 
   // Verify request HMAC (proves the app knows the secret)
@@ -222,6 +242,10 @@ async function handleTrialCheck(request, env, corsHeaders) {
 
   if (!fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
   }
 
   // Verify request HMAC
@@ -359,6 +383,10 @@ async function handleActivationActivate(request, env, corsHeaders) {
     return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
   }
 
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
+  }
+
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
   if (!validRequest) {
     return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
@@ -467,6 +495,10 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
     return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
   }
 
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
+  }
+
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
   if (!validRequest) {
     return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
@@ -521,6 +553,10 @@ async function handleActivationCheck(request, env, corsHeaders) {
 
   if (!isValidLicenseId(license_id)) {
     return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
+  }
+
+  if (!isValidFingerprint(fingerprint) || !isValidAppId(app_id)) {
+    return jsonResponse({ error: "invalid field format" }, 400, corsHeaders);
   }
 
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
@@ -617,9 +653,27 @@ async function handleCheckoutCompleted(session, env) {
   });
 }
 
+// Validate a Stripe resource ID format (e.g. sub_xxx, cus_xxx) to prevent URL path injection
+function isValidStripeId(id, prefix) {
+  return typeof id === "string" && new RegExp(`^${prefix}_[A-Za-z0-9]+$`).test(id);
+}
+
+// Validate GitHub repo format (owner/repo) to prevent URL injection
+function isValidGitHubRepo(repo) {
+  return typeof repo === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo);
+}
+
+// Validate workflow ID format to prevent URL injection
+function isValidWorkflowId(id) {
+  return typeof id === "string" && /^[A-Za-z0-9_.-]+$/.test(id);
+}
+
 async function handleInvoicePaid(invoice, env) {
   if (!invoice.subscription) return;
   if (invoice.billing_reason === "subscription_create") return;
+
+  // Validate subscription ID format before using in URL path
+  if (!isValidStripeId(invoice.subscription, "sub")) return;
 
   const subscription = await stripeGet(`/v1/subscriptions/${invoice.subscription}`, env.STRIPE_SECRET_KEY);
   const metadata = subscription.metadata || {};
@@ -636,6 +690,8 @@ async function handleInvoicePaid(invoice, env) {
   const previousLicenseId = sanitizeField(metadata.tessera_license_id || "", 36);
 
   const renewalWorkflowId = env.GITHUB_RENEWAL_WORKFLOW_ID || "tessera-renew-license.yml";
+
+  if (!isValidGitHubRepo(env.GITHUB_REPO) || !isValidWorkflowId(renewalWorkflowId)) return;
 
   await fetch(
     `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${renewalWorkflowId}/dispatches`,
@@ -674,6 +730,10 @@ async function handleSubscriptionCanceled(subscription, env) {
 // --- GitHub Action Trigger ---
 
 async function triggerLicenseGeneration(env, params) {
+  if (!isValidGitHubRepo(env.GITHUB_REPO) || !isValidWorkflowId(env.GITHUB_WORKFLOW_ID)) {
+    throw new Error("Invalid GITHUB_REPO or GITHUB_WORKFLOW_ID configuration");
+  }
+
   const response = await fetch(
     `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW_ID}/dispatches`,
     {

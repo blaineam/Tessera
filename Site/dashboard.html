@@ -735,22 +735,36 @@ function renderTable() {
         const badgeClass = { active: 'badge-active', expiring: 'badge-expiring', expired: 'badge-expired', revoked: 'badge-revoked' }[status];
         const expStr = lic.expires === 'perpetual' ? 'Perpetual' : lic.expires ? formatDate(lic.expires) + ' (' + daysUntil(lic.expires) + ')' : '\u2014';
         const subStatus = lic.subscription?.active ? '<span class="badge badge-active">Active</span>' : '<span style="color:var(--text-dim)">\u2014</span>';
+        // Escape lid for safe use in HTML attributes (prevent XSS via crafted license IDs)
+        const safeLid = escAttr(lid);
 
         tr.innerHTML = `
-            <td><span class="badge ${badgeClass}">${status}</span></td>
-            <td class="mono" style="cursor:pointer;" onclick="copyText('${lid}')" title="Click to copy">${lid.substring(0,8)}...</td>
-            <td><span class="editable" ondblclick="editNickname(this,'${lid}')">${nick || '<span style=color:var(--text-dim)>double-click to set</span>'}</span></td>
-            <td><span class="badge badge-tier">${lic.tier || '\u2014'}</span></td>
+            <td><span class="badge ${badgeClass}">${escHtml(status)}</span></td>
+            <td class="mono" style="cursor:pointer;" title="Click to copy">${escHtml(lid.substring(0,8))}...</td>
+            <td><span class="editable">${nick || '<span style=color:var(--text-dim)>double-click to set</span>'}</span></td>
+            <td><span class="badge badge-tier">${escHtml(lic.tier || '\u2014')}</span></td>
             <td>${lic.issued ? formatDate(lic.issued) : '\u2014'}</td>
             <td>${expStr}</td>
             <td>${subStatus}</td>
-            <td>
-                ${status !== 'revoked'
-                    ? `<button class="btn btn-danger btn-sm" onclick="showRevokeModal('${lid}')">Revoke</button>`
-                    : `<button class="btn btn-sm" onclick="unrevoke('${lid}')">Unrevoke</button>`
-                }
-            </td>
+            <td></td>
         `;
+        // Bind events safely via addEventListener instead of inline onclick (prevents XSS)
+        tr.querySelector('td:nth-child(2)').addEventListener('click', () => copyText(lid));
+        tr.querySelector('.editable').addEventListener('dblclick', function() { editNickname(this, lid); });
+        const actionCell = tr.querySelector('td:last-child');
+        if (status !== 'revoked') {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-danger btn-sm';
+            btn.textContent = 'Revoke';
+            btn.addEventListener('click', () => showRevokeModal(lid));
+            actionCell.appendChild(btn);
+        } else {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm';
+            btn.textContent = 'Unrevoke';
+            btn.addEventListener('click', () => unrevoke(lid));
+            actionCell.appendChild(btn);
+        }
         tbody.appendChild(tr);
     }
 }
@@ -1046,8 +1060,19 @@ async function addLicense() {
         } else {
             // Couldn't extract key from logs — point user to the run
             document.getElementById('keyOutputText').textContent = 'License key generated — check the workflow run for the key.';
-            document.getElementById('keyOutputMeta').innerHTML =
-                `<a href="${result.runUrl}" target="_blank" style="color:var(--accent);">View workflow run</a>`;
+            const metaEl = document.getElementById('keyOutputMeta');
+            // Validate runUrl is a GitHub URL to prevent javascript: injection
+            if (result.runUrl && /^https:\/\/github\.com\//.test(result.runUrl)) {
+                const link = document.createElement('a');
+                link.href = result.runUrl;
+                link.target = '_blank';
+                link.style.color = 'var(--accent)';
+                link.textContent = 'View workflow run';
+                metaEl.innerHTML = '';
+                metaEl.appendChild(link);
+            } else {
+                metaEl.textContent = 'Check GitHub Actions for the workflow run.';
+            }
             document.getElementById('keyOutputModal').classList.add('active');
         }
 
@@ -1066,8 +1091,8 @@ function showKeyOutput(licenseKey, lid, tier, durationDays, email) {
     document.getElementById('keyOutputText').textContent = licenseKey;
     let meta = '';
     if (lid) meta += `<strong>ID:</strong> ${escHtml(lid)}<br>`;
-    meta += `<strong>Tier:</strong> ${tier}<br>`;
-    meta += `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : durationDays + ' days'}<br>`;
+    meta += `<strong>Tier:</strong> ${escHtml(tier)}<br>`;
+    meta += `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : escHtml(String(durationDays)) + ' days'}<br>`;
     if (email) meta += `<strong>Emailed to:</strong> ${escHtml(email)}`;
     document.getElementById('keyOutputMeta').innerHTML = meta;
     document.getElementById('keyOutputModal').classList.add('active');
@@ -1191,6 +1216,10 @@ function escHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function escAttr(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function toast(msg, type = 'success') {
