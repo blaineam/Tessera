@@ -169,6 +169,13 @@ input:focus, select:focus { border-color:var(--accent); }
             <div class="hint">Path to revoked.json in the repo above</div>
         </div>
         <hr>
+        <p style="color:var(--text);font-weight:600;margin-bottom:12px;">PII Encryption (recommended)</p>
+        <div class="form-group">
+            <label>Encryption Passphrase</label>
+            <input type="password" id="setupEncryptionPassphrase" placeholder="Enter a strong passphrase">
+            <div class="hint">Encrypts customer emails, nicknames, and Stripe IDs in licenses.json using AES-256-GCM. Stored locally only.</div>
+        </div>
+        <hr>
         <p style="color:var(--text);font-weight:600;margin-bottom:12px;">License Signing (optional)</p>
         <div class="form-group">
             <label>Ed25519 Private Key (PEM)</label>
@@ -311,6 +318,11 @@ input:focus, select:focus { border-color:var(--accent); }
             <input type="text" id="settingsBranch" style="width:100%;">
         </div>
         <div class="form-group">
+            <label>PII Encryption Passphrase</label>
+            <input type="password" id="settingsEncryptionPassphrase" style="width:100%;" placeholder="Passphrase for encrypting customer PII">
+            <div class="hint" style="font-size:11px;color:var(--text-dim);margin-top:2px;">Encrypts emails, nicknames, and Stripe IDs with AES-256-GCM. Stored locally only.</div>
+        </div>
+        <div class="form-group">
             <label>Ed25519 Private Key (PEM)</label>
             <textarea id="settingsSigningKey" rows="3" style="width:100%;font-family:'SF Mono',Menlo,monospace;font-size:11px;" placeholder="Paste to enable license generation from dashboard"></textarea>
             <div class="hint" style="font-size:11px;color:var(--text-dim);margin-top:2px;">Stored locally only. Leave blank to disable dashboard signing.</div>
@@ -384,6 +396,95 @@ function activeApp() {
     return config.apps[config.activeApp] || null;
 }
 
+// --- E2E Encryption for PII Fields ---
+const PII_FIELDS = ['customer_email', 'nickname', 'stripe_customer_id', 'stripe_session_id'];
+
+async function deriveKey(passphrase, salt) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+    );
+}
+
+function getEncryptionPassphrase() {
+    return localStorage.getItem('tessera_encryption_passphrase') || '';
+}
+
+function getEncryptionSalt() {
+    let b64 = localStorage.getItem('tessera_encryption_salt');
+    if (!b64) {
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        b64 = btoa(String.fromCharCode(...salt));
+        localStorage.setItem('tessera_encryption_salt', b64);
+    }
+    return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function encryptValue(plaintext, key) {
+    if (!plaintext) return plaintext;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+    const ivB64 = btoa(String.fromCharCode(...iv));
+    const ctB64 = btoa(String.fromCharCode(...new Uint8Array(ciphertext)));
+    return 'ENC:' + ivB64 + ':' + ctB64;
+}
+
+async function decryptValue(encrypted, key) {
+    if (!encrypted || !encrypted.startsWith('ENC:')) return encrypted;
+    try {
+        const parts = encrypted.split(':');
+        if (parts.length !== 3) return encrypted;
+        const iv = Uint8Array.from(atob(parts[1]), c => c.charCodeAt(0));
+        const ct = Uint8Array.from(atob(parts[2]), c => c.charCodeAt(0));
+        const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+        return new TextDecoder().decode(plainBuf);
+    } catch {
+        return '[decryption failed]';
+    }
+}
+
+async function encryptLicensePII(licenseData) {
+    const passphrase = getEncryptionPassphrase();
+    if (!passphrase) return licenseData;
+    const salt = getEncryptionSalt();
+    const key = await deriveKey(passphrase, salt);
+    const clone = JSON.parse(JSON.stringify(licenseData));
+    for (const lic of clone.licenses) {
+        for (const field of PII_FIELDS) {
+            if (lic[field] && !lic[field].startsWith('ENC:')) {
+                lic[field] = await encryptValue(lic[field], key);
+            }
+        }
+    }
+    return clone;
+}
+
+async function decryptLicensePII(licenseData) {
+    const passphrase = getEncryptionPassphrase();
+    if (!passphrase) return licenseData;
+    const salt = getEncryptionSalt();
+    const key = await deriveKey(passphrase, salt);
+    for (const lic of licenseData.licenses) {
+        for (const field of PII_FIELDS) {
+            if (lic[field] && typeof lic[field] === 'string' && lic[field].startsWith('ENC:')) {
+                lic[field] = await decryptValue(lic[field], key);
+            }
+        }
+    }
+    return licenseData;
+}
+
+async function encryptedLicensesJSON() {
+    const encrypted = await encryptLicensePII(licenses);
+    return JSON.stringify(encrypted, null, 2);
+}
+
 // --- Init ---
 (function init() {
     const saved = localStorage.getItem('tessera_config');
@@ -443,6 +544,8 @@ function connect() {
     };
     localStorage.setItem('tessera_config', JSON.stringify(config));
     if (signingKey) localStorage.setItem('tessera_signing_key', signingKey);
+    const encPassphrase = document.getElementById('setupEncryptionPassphrase').value.trim();
+    if (encPassphrase) localStorage.setItem('tessera_encryption_passphrase', encPassphrase);
     showApp();
     loadData();
 }
@@ -459,6 +562,8 @@ function showApp() {
 function disconnect() {
     localStorage.removeItem('tessera_config');
     localStorage.removeItem('tessera_signing_key');
+    localStorage.removeItem('tessera_encryption_passphrase');
+    localStorage.removeItem('tessera_encryption_salt');
     config = { token: '', repo: '', branch: 'main', apps: [], activeApp: 0 };
     location.reload();
 }
@@ -542,6 +647,7 @@ function confirmAddApp() {
 function showSettingsModal() {
     document.getElementById('settingsRepo').value = config.repo;
     document.getElementById('settingsBranch').value = config.branch;
+    document.getElementById('settingsEncryptionPassphrase').value = localStorage.getItem('tessera_encryption_passphrase') || '';
     document.getElementById('settingsSigningKey').value = localStorage.getItem('tessera_signing_key') || '';
     renderSettingsAppList();
     document.getElementById('settingsModal').classList.add('active');
@@ -601,6 +707,10 @@ function saveSettings() {
         if (licInput) config.apps[i].licensesPath = licInput.value.trim();
         if (revInput) config.apps[i].revokedPath = revInput.value.trim();
     }
+
+    const encPassphrase = document.getElementById('settingsEncryptionPassphrase').value.trim();
+    if (encPassphrase) localStorage.setItem('tessera_encryption_passphrase', encPassphrase);
+    else localStorage.removeItem('tessera_encryption_passphrase');
 
     const signingKey = document.getElementById('settingsSigningKey').value.trim();
     if (signingKey) localStorage.setItem('tessera_signing_key', signingKey);
@@ -674,6 +784,7 @@ async function loadData() {
             licensesSHA = licRes.sha;
             licenses = JSON.parse(decodeURIComponent(escape(atob(licRes.content.replace(/\n/g, '')))));
             if (Array.isArray(licenses)) licenses = { licenses, updated: '' };
+            licenses = await decryptLicensePII(licenses);
         }
 
         if (revRes) {
@@ -1035,7 +1146,7 @@ async function addLicense() {
             licenses.licenses.push(entry);
             licenses.updated = nowISO;
 
-            const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
+            const result = await ghPut(app.licensesPath, await encryptedLicensesJSON(), licensesSHA, `Add ${tier} license: ${lid.substring(0, 8)}`);
             licensesSHA = result.content.sha;
             render();
             closeModals();
@@ -1127,7 +1238,7 @@ async function confirmRevoke() {
         // Sequential to avoid parallel SHA conflicts
         const revResult = await ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Revoke license: ${lid.substring(0, 8)}`);
         revokedSHA = revResult.content.sha;
-        const licResult = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`);
+        const licResult = await ghPut(app.licensesPath, await encryptedLicensesJSON(), licensesSHA, `Mark revoked: ${lid.substring(0, 8)}`);
         licensesSHA = licResult.content.sha;
 
         render();
@@ -1155,7 +1266,7 @@ async function unrevoke(lid) {
 
         const revResult = await ghPut(app.revokedPath, JSON.stringify(revoked, null, 2), revokedSHA, `Unrevoke: ${lid.substring(0, 8)}`);
         revokedSHA = revResult.content.sha;
-        const licResult = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`);
+        const licResult = await ghPut(app.licensesPath, await encryptedLicensesJSON(), licensesSHA, `Unrevoke: ${lid.substring(0, 8)}`);
         licensesSHA = licResult.content.sha;
 
         render();
@@ -1185,7 +1296,7 @@ async function editNickname(el, lid) {
         if (lic) lic.nickname = val;
         licenses.updated = new Date().toISOString();
         try {
-            const result = await ghPut(app.licensesPath, JSON.stringify(licenses, null, 2), licensesSHA, `Rename: ${lid.substring(0, 8)} \u2192 ${val}`);
+            const result = await ghPut(app.licensesPath, await encryptedLicensesJSON(), licensesSHA, `Rename: ${lid.substring(0, 8)} \u2192 ${val}`);
             licensesSHA = result.content.sha;
             renderTable();
         } catch (e) {

@@ -6,7 +6,7 @@
       "issued": "2026-04-05T11:37:54Z",
       "expires": "2027-04-05T11:37:54Z",
       "nickname": "",
-      "customer_email": "redacted@example.com",
+      "customer_email": "",
       "stripe_customer_id": "",
       "subscription": {
         "active": false,
@@ -21,7 +21,7 @@
       "issued": "2026-04-05T11:52:58Z",
       "expires": "2027-04-05T11:52:58Z",
       "nickname": "",
-      "customer_email": "redacted@example.com",
+      "customer_email": "",
       "stripe_customer_id": "",
       "subscription": {
         "active": false,
@@ -31,5 +31,5 @@
       "revoked": false
     }
   ],
-  "updated": "2026-04-05T11:52:58Z"
+  "updated": "2026-04-06T00:00:00Z"
 }
