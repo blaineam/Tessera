@@ -644,14 +644,18 @@ async function handleCheckoutCompleted(session, env) {
   const customerName = sanitizeField(session.customer_details?.name || "", 100);
   const nickname = sanitizeField(customerName || customerEmail.split("@")[0] || "Customer", 100);
 
+  // Validate Stripe IDs before passing to workflow dispatch (defense-in-depth)
+  const stripeSessionId = isValidStripeId(session.id, "cs") ? session.id : "";
+  const stripeCustomerId = isValidStripeId(session.customer, "cus") ? session.customer : "";
+
   await triggerLicenseGeneration(env, {
     tier,
     duration_days: durationDays,
     features,
     nickname,
     customer_email: customerEmail,
-    stripe_session_id: session.id,
-    stripe_customer_id: session.customer || ""
+    stripe_session_id: stripeSessionId,
+    stripe_customer_id: stripeCustomerId
   });
 }
 
@@ -711,11 +715,11 @@ async function handleInvoicePaid(invoice, env) {
           previous_license_id: previousLicenseId,
           tier: metadata.tier,
           duration_days: durationDays,
-          features: metadata.features || "0",
+          features: /^\d+$/.test(metadata.features) ? metadata.features : "0",
           nickname,
           customer_email: customerEmail,
           stripe_subscription_id: invoice.subscription,
-          stripe_customer_id: invoice.customer || ""
+          stripe_customer_id: isValidStripeId(invoice.customer, "cus") ? invoice.customer : ""
         }
       })
     }
