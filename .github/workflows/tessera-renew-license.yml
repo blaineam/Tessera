@@ -83,6 +83,10 @@ jobs:
             echo "::error::duration_days must be a non-negative integer"
             exit 1
           fi
+          if [ "$INPUT_DURATION_DAYS" -gt 3650 ]; then
+            echo "::error::duration_days exceeds maximum (3650)"
+            exit 1
+          fi
           if echo "$INPUT_NICKNAME" | grep -qE '["`$\\]'; then
             echo "::error::nickname contains disallowed characters"
             exit 1
@@ -163,7 +167,6 @@ jobs:
           prev_lid = os.environ["INPUT_PREVIOUS_LICENSE_ID"]
           new_lid = os.environ["LICENSE_ID"]
           tier = os.environ["INPUT_TIER"]
-          nickname = os.environ["INPUT_NICKNAME"]
 
           with open(licenses_file, "r") as f:
               data = json.load(f)
@@ -187,7 +190,6 @@ jobs:
               "tier": tier,
               "issued": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
               "expires": expires,
-              "nickname": nickname,
               "subscription": {
                   "active": True,
                   "interval": interval,

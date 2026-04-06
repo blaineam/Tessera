@@ -606,7 +606,12 @@ struct TrialManager {
         // Use a plausible-looking but Tessera-namespaced service name to avoid
         // collisions with real system entries
         guard let hwHash = HardwareFingerprint.shortFingerprint(salt: "decoy-\(configuration.trialSalt)") else {
-            return KeychainStore(appIdentifier: "com.tessera.cache.\(configuration.appIdentifier.hashValue)")
+            // Use a deterministic hash instead of Swift's hashValue (which is
+            // randomized per process and would create a new keychain entry each launch)
+            let idData = Data(configuration.appIdentifier.utf8)
+            let idHash = SHA256.hash(data: idData)
+            let idHashPrefix = idHash.prefix(4).map { String(format: "%02x", $0) }.joined()
+            return KeychainStore(appIdentifier: "com.tessera.cache.\(idHashPrefix)")
         }
         return KeychainStore(appIdentifier: "com.tessera.cache.\(hwHash.prefix(8))")
     }

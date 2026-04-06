@@ -5,7 +5,6 @@
       "tier": "pro",
       "issued": "2026-04-05T09:53:18.634Z",
       "expires": "2027-04-05T09:53:18.634Z",
-      "nickname": "Blaine",
       "subscription": {
         "active": false,
         "interval": "yearly",
@@ -18,7 +17,6 @@
       "tier": "pro",
       "issued": "2026-04-05T10:07:59.797Z",
       "expires": "2027-04-05T10:07:59.797Z",
-      "nickname": "Blaine 2",
       "subscription": {
         "active": false,
         "interval": "yearly",
@@ -31,7 +29,6 @@
       "tier": "pro",
       "issued": "2026-04-05T11:29:59.900Z",
       "expires": "2027-04-05T11:29:59.900Z",
-      "nickname": "BlaineM",
       "subscription": {
         "active": false,
         "interval": "yearly",
@@ -44,7 +41,6 @@
       "tier": "pro",
       "issued": "2026-04-05T12:16:59Z",
       "expires": "2027-04-05T12:16:59Z",
-      "nickname": "BMiller",
       "subscription": {
         "active": false,
         "interval": "yearly",
@@ -57,7 +53,6 @@
       "tier": "personal",
       "issued": "2026-04-05T12:18:01Z",
       "expires": "2026-05-05T12:18:01Z",
-      "nickname": "Maybe?",
       "subscription": {
         "active": false,
         "interval": "monthly",
@@ -70,7 +65,6 @@
       "tier": "personal",
       "issued": "2026-04-05T12:48:34Z",
       "expires": "2027-04-05T12:48:34Z",
-      "nickname": "Blaine",
       "subscription": {
         "active": false,
         "interval": "yearly",
@@ -83,7 +77,6 @@
       "tier": "pro",
       "issued": "2026-04-05T12:49:28Z",
       "expires": "2027-04-05T12:49:28Z",
-      "nickname": "Blaine",
       "subscription": {
         "active": false,
         "interval": "yearly",
@@ -96,7 +89,6 @@
       "tier": "pro",
       "issued": "2026-04-05T12:51:13Z",
       "expires": "2027-04-05T12:51:13Z",
-      "nickname": "Blaine",
       "subscription": {
         "active": false,
         "interval": "yearly",
