@@ -26,6 +26,8 @@
  *   GITHUB_WORKFLOW_ID     — e.g. "tessera-generate-license.yml"
  *   TRIAL_SECRET           — Shared secret for trial + activation API authentication
  *   MAX_DEVICES            — Maximum devices per license (default: 3)
+ *   ALLOWED_ORIGIN         — Allowed CORS origin (default: none — native apps don't need CORS)
+ *   RESPONSE_SIGNING_KEY   — Ed25519 private key (base64, 32 bytes) for signing API responses
  *
  * KV Namespace binding:
  *   TRIAL_KV               — Cloudflare KV namespace for trial + activation records
@@ -38,14 +40,21 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // CORS headers for the trial API (called from the app)
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    };
+    // CORS headers — restricted to configured origin (native apps don't need CORS)
+    const allowedOrigin = env.ALLOWED_ORIGIN || "";
+    const requestOrigin = request.headers.get("Origin") || "";
+    const corsHeaders = {};
+
+    if (allowedOrigin && requestOrigin === allowedOrigin) {
+      corsHeaders["Access-Control-Allow-Origin"] = allowedOrigin;
+      corsHeaders["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+      corsHeaders["Access-Control-Allow-Headers"] = "Content-Type";
+    }
 
     if (request.method === "OPTIONS") {
+      if (!allowedOrigin || requestOrigin !== allowedOrigin) {
+        return new Response(null, { status: 403 });
+      }
       return new Response(null, { headers: corsHeaders });
     }
 
@@ -53,6 +62,13 @@ export default {
       // --- Health ---
       if (url.pathname === "/health") {
         return jsonResponse({ status: "ok", service: "tessera" }, 200, corsHeaders);
+      }
+
+      // --- Rate limiting (basic per-IP) ---
+      const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+      const rateLimitResult = await checkRateLimit(env, clientIP, url.pathname);
+      if (!rateLimitResult.allowed) {
+        return jsonResponse({ error: "rate limit exceeded" }, 429, corsHeaders);
       }
 
       // --- Trial Registration ---
@@ -86,10 +102,32 @@ export default {
       return new Response("Not found", { status: 404 });
     } catch (err) {
       console.error("Worker error:", err);
-      return jsonResponse({ error: err.message }, 500, corsHeaders);
+      return jsonResponse({ error: "internal error" }, 500, corsHeaders);
     }
   }
 };
+
+// ============================================================
+// Rate Limiting (basic per-IP using KV with TTL)
+// ============================================================
+
+async function checkRateLimit(env, clientIP, pathname) {
+  // Rate limit: 30 requests per minute per IP for trial/activation endpoints
+  if (!pathname.startsWith("/trial/") && !pathname.startsWith("/activation/")) {
+    return { allowed: true };
+  }
+
+  const key = `ratelimit:${clientIP}:${Math.floor(Date.now() / 60000)}`;
+  const current = parseInt(await env.TRIAL_KV.get(key)) || 0;
+
+  if (current >= 30) {
+    return { allowed: false };
+  }
+
+  // Increment (TTL of 120 seconds ensures cleanup)
+  await env.TRIAL_KV.put(key, String(current + 1), { expirationTtl: 120 });
+  return { allowed: true };
+}
 
 // ============================================================
 // Trial Registry (HMAC-authenticated, MITM-resistant)
@@ -101,14 +139,12 @@ export default {
 // Request:  {fingerprint, app_id, timestamp, request_hmac}
 //   request_hmac = HMAC(secret, fingerprint + ":" + app_id + ":" + timestamp)
 //
-// Response: {used/allowed, registered_at, nonce, hmac}
+// Response: {used/allowed, registered_at, nonce, hmac, ed25519_sig}
 //   hmac = HMAC(secret, action + ":" + fingerprint + ":" + nonce + ":" + registered_at)
+//   ed25519_sig = Ed25519(private_key, action + ":" + fingerprint + ":" + nonce + ":" + registered_at)
 //
-// Even with full TLS interception:
-// - Attacker sees HMACs but can't extract the secret (one-way)
-// - Attacker can't forge a valid response without the secret
-// - Random nonce in response prevents replaying old valid responses
-// - Timestamp in request prevents replaying old requests (5-min window)
+// The Ed25519 signature provides asymmetric verification — the client can verify
+// responses using the public key without the private key ever being in the binary.
 
 async function handleTrialRegister(request, env, corsHeaders) {
   const body = await request.json();
@@ -140,12 +176,14 @@ async function handleTrialRegister(request, env, corsHeaders) {
     const registeredAt = record.registered_at;
     const action = "register:denied";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, registeredAt, env.RESPONSE_SIGNING_KEY);
 
     return jsonResponse({
       allowed: false,
       registered_at: registeredAt,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
@@ -160,12 +198,14 @@ async function handleTrialRegister(request, env, corsHeaders) {
 
   const action = "register:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, registeredAt, env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     allowed: true,
     registered_at: registeredAt,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -198,22 +238,26 @@ async function handleTrialCheck(request, env, corsHeaders) {
     const registeredAt = record.registered_at;
     const action = "check:used";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, registeredAt, env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, registeredAt, env.RESPONSE_SIGNING_KEY);
 
     return jsonResponse({
       used: true,
       registered_at: registeredAt,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
   const action = "check:fresh";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     used: false,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -249,6 +293,32 @@ function timingSafeEqual(a, b) {
     mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+// --- Ed25519 Response Signing ---
+
+async function computeResponseSignature(action, fingerprint, nonce, registeredAt, signingKeyBase64) {
+  if (!signingKeyBase64) return null;
+
+  try {
+    const keyBytes = Uint8Array.from(atob(signingKeyBase64), c => c.charCodeAt(0));
+    // Import as Ed25519 (PKCS8 format for 32-byte seed)
+    // Cloudflare Workers support Ed25519 via crypto.subtle
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyBytes,
+      { name: "Ed25519" },
+      false,
+      ["sign"]
+    );
+
+    const message = `${action}:${fingerprint}:${nonce}:${registeredAt}`;
+    const sig = await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(message));
+    return btoa(String.fromCharCode(...new Uint8Array(sig)));
+  } catch (err) {
+    console.error("Ed25519 signing failed:", err);
+    return null;
+  }
 }
 
 // ============================================================
@@ -294,13 +364,15 @@ async function handleActivationActivate(request, env, corsHeaders) {
   if (alreadyActive) {
     const action = "activate:ok";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
     return jsonResponse({
       activated: true,
       active: true,
       device_count: record.devices.length,
       max_devices: maxDevices,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
@@ -308,13 +380,15 @@ async function handleActivationActivate(request, env, corsHeaders) {
   if (record.devices.length >= maxDevices) {
     const action = "activate:denied";
     const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+    const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
     return jsonResponse({
       activated: false,
       active: false,
       device_count: record.devices.length,
       max_devices: maxDevices,
       nonce,
-      hmac: responseHMAC
+      hmac: responseHMAC,
+      ...(ed25519Sig && { ed25519_sig: ed25519Sig })
     }, 200, corsHeaders);
   }
 
@@ -327,12 +401,14 @@ async function handleActivationActivate(request, env, corsHeaders) {
 
   const action = "activate:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
   return jsonResponse({
     activated: true,
     device_count: record.devices.length,
     max_devices: maxDevices,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -366,11 +442,13 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
 
   const action = "deactivate:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
   return jsonResponse({
     deactivated: true,
     device_count: record.devices.length,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -402,13 +480,15 @@ async function handleActivationCheck(request, env, corsHeaders) {
   const isActive = record.devices.some(d => d.fingerprint === fingerprint);
   const action = isActive ? "check:active" : "check:inactive";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
+  const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
 
   return jsonResponse({
     active: isActive,
     device_count: record.devices.length,
     max_devices: maxDevices,
     nonce,
-    hmac: responseHMAC
+    hmac: responseHMAC,
+    ...(ed25519Sig && { ed25519_sig: ed25519Sig })
   }, 200, corsHeaders);
 }
 
@@ -546,7 +626,7 @@ async function triggerLicenseGeneration(env, params) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`GitHub API ${response.status}: ${text}`);
+    throw new Error(`GitHub API error: ${response.status}`);
   }
 }
 

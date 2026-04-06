@@ -34,28 +34,44 @@ struct TrialToken: Codable {
     let hmac: String
 }
 
-/// Response from the trial registry server (HMAC-signed).
+/// Response from the trial registry server (HMAC-signed + optionally Ed25519-signed).
 private struct TrialRegistryResponse: Codable {
     let used: Bool?
     let allowed: Bool?
     let registered_at: String?
     let nonce: String
-    let hmac: String   // HMAC(secret, payload) — proves the server knows the secret
+    let hmac: String        // HMAC(secret, payload) — proves the server knows the secret
+    let ed25519_sig: String? // Ed25519 signature — asymmetric proof (can't be forged from client secret)
 }
 
 /// Manages the two-tier trial system.
 struct TrialManager {
     private let configuration: TesseraConfiguration
     private let keychain: KeychainStore
+    private let responseVerifier: ResponseSignatureVerifier?
 
     private static let trialTokenKey = "trial_token"
     private static let lastSeenDateKey = "last_seen_date"
     private static let anchorCountKey = "anchor_watermark"
     private static let serverTrialStartKey = "server_trial_start"
 
+    /// Maximum allowed forward clock jump before treating as tampering (48 hours).
+    /// A legitimate clock jump (e.g. timezone change, NTP correction) is typically small.
+    private static let maxForwardJumpSeconds: TimeInterval = 48 * 3600
+
     init(configuration: TesseraConfiguration) {
         self.configuration = configuration
         self.keychain = KeychainStore(appIdentifier: configuration.appIdentifier)
+
+        // Initialize Ed25519 response verifier if a public key is configured
+        if let keyBase64 = configuration.responseVerificationKeyBase64,
+           let keyData = Data(base64Encoded: keyBase64),
+           keyData.count == 32,
+           let pubKey = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData) {
+            self.responseVerifier = ResponseSignatureVerifier(publicKey: pubKey)
+        } else {
+            self.responseVerifier = nil
+        }
     }
 
     private var hmacKey: SymmetricKey? {
@@ -188,15 +204,13 @@ struct TrialManager {
     //   where request_hmac = HMAC(secret, fingerprint + app_id + timestamp)
     //   The server verifies this to authenticate the request.
     //
-    // Response: {used/allowed, registered_at, nonce, hmac}
-    //   where hmac = HMAC(secret, used + fingerprint + nonce)
-    //   The app verifies this to authenticate the response.
+    // Response: {used/allowed, registered_at, nonce, hmac, ed25519_sig}
+    //   where hmac = HMAC(secret, used + fingerprint + nonce)  (legacy, symmetric)
+    //   and ed25519_sig = Ed25519(server_private_key, same message)  (asymmetric, preferred)
+    //   The app verifies the Ed25519 signature (preferred) or HMAC (fallback).
     //
-    // Even with full TLS interception (MITM proxy + custom CA):
-    // - Attacker sees HMACs but can't extract the secret (HMAC is one-way)
-    // - Attacker can't forge a valid response without the secret
-    // - Nonce in response prevents replaying old valid responses
-    // - Timestamp in request prevents replaying old requests
+    // The Ed25519 response signature cannot be forged even if the HMAC secret
+    // is extracted from the binary, since the signing key is server-side only.
 
     private func computeRequestHMAC(fingerprint: String, timestamp: String) -> String? {
         guard let secret = configuration.trialRegistrySecret else { return nil }
@@ -206,10 +220,26 @@ struct TrialManager {
         return Data(mac).base64EncodedString()
     }
 
+    /// Verify a server response using Ed25519 signature (preferred) or HMAC (fallback).
+    private func verifyResponse(_ response: TrialRegistryResponse, fingerprint: String, action: String) -> Bool {
+        let registeredAt = response.registered_at ?? ""
+        let message = "\(action):\(fingerprint):\(response.nonce):\(registeredAt)"
+
+        // Prefer Ed25519 signature verification (asymmetric — can't be forged from client)
+        if let verifier = responseVerifier,
+           let sigBase64 = response.ed25519_sig,
+           let sigData = Data(base64Encoded: sigBase64),
+           let msgData = message.data(using: .utf8) {
+            return verifier.publicKey.isValidSignature(sigData, for: msgData)
+        }
+
+        // Fallback to HMAC verification (symmetric — weaker but still validates)
+        return verifyResponseHMAC(response: response, fingerprint: fingerprint, action: action)
+    }
+
     private func verifyResponseHMAC(response: TrialRegistryResponse, fingerprint: String, action: String) -> Bool {
         guard let secret = configuration.trialRegistrySecret else { return false }
 
-        // The server computes: HMAC(secret, action + ":" + fingerprint + ":" + nonce + ":" + registered_at)
         let registeredAt = response.registered_at ?? ""
         let message = "\(action):\(fingerprint):\(response.nonce):\(registeredAt)"
         let key = SymmetricKey(data: Data(secret.utf8))
@@ -250,11 +280,11 @@ struct TrialManager {
 
             let result = try JSONDecoder().decode(TrialRegistryResponse.self, from: data)
 
-            // Verify the server's response HMAC
+            // Verify the server's response signature
             let used = result.used ?? false
             let action = used ? "check:used" : "check:fresh"
-            guard verifyResponseHMAC(response: result, fingerprint: fingerprint, action: action) else {
-                // Invalid HMAC — response was tampered with
+            guard verifyResponse(result, fingerprint: fingerprint, action: action) else {
+                // Invalid signature — response was tampered with
                 return .serverUnreachable
             }
 
@@ -303,10 +333,10 @@ struct TrialManager {
 
             let result = try JSONDecoder().decode(TrialRegistryResponse.self, from: data)
 
-            // Verify response HMAC
+            // Verify response signature
             let allowed = result.allowed ?? false
             let action = allowed ? "register:ok" : "register:denied"
-            guard verifyResponseHMAC(response: result, fingerprint: fingerprint, action: action) else {
+            guard verifyResponse(result, fingerprint: fingerprint, action: action) else {
                 return false
             }
 
@@ -447,7 +477,21 @@ struct TrialManager {
 
     private func isClockTampered() -> Bool {
         guard let lastSeen = keychain.getDate(Self.lastSeenDateKey) else { return false }
-        return Date().timeIntervalSince(lastSeen) < -3600
+        let delta = Date().timeIntervalSince(lastSeen)
+
+        // Detect backward clock jumps (> 1 hour)
+        if delta < -3600 {
+            return true
+        }
+
+        // Detect suspicious forward clock jumps (> 48 hours since last check).
+        // A user could advance the clock to expire the trial, reset local state,
+        // then set the clock back. This catches the forward jump.
+        if delta > Self.maxForwardJumpSeconds {
+            return true
+        }
+
+        return false
     }
 
     private func recordCurrentDate() {
@@ -559,10 +603,12 @@ struct TrialManager {
     // MARK: - Anchor 5: Decoy Keychain
 
     private var decoyKeychain: KeychainStore {
+        // Use a plausible-looking but Tessera-namespaced service name to avoid
+        // collisions with real system entries
         guard let hwHash = HardwareFingerprint.shortFingerprint(salt: "decoy-\(configuration.trialSalt)") else {
-            return KeychainStore(appIdentifier: "sys.preference.\(configuration.appIdentifier.hashValue)")
+            return KeychainStore(appIdentifier: "com.tessera.cache.\(configuration.appIdentifier.hashValue)")
         }
-        return KeychainStore(appIdentifier: "com.apple.preference.\(hwHash.prefix(8))")
+        return KeychainStore(appIdentifier: "com.tessera.cache.\(hwHash.prefix(8))")
     }
 
     private var decoyTokenKey: String { "cache_metadata" }
@@ -576,4 +622,11 @@ struct TrialManager {
         guard let data = try? JSONEncoder().encode(token) else { return }
         try? decoyKeychain.setData(data, for: decoyTokenKey)
     }
+}
+
+// MARK: - Ed25519 Response Signature Verifier
+
+/// Verifies Ed25519 signatures on server API responses.
+private struct ResponseSignatureVerifier {
+    let publicKey: Curve25519.Signing.PublicKey
 }

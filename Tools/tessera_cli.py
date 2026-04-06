@@ -174,6 +174,19 @@ def cmd_verify(args):
         sys.exit(2)
 
 
+def sign_revocation_list(data: dict, private_key: Ed25519PrivateKey) -> str:
+    """Sign the revocation list with Ed25519.
+
+    Canonical message: sorted revoked IDs joined by "," + ":" + updated timestamp.
+    This must match the verification logic in RevocationChecker.swift.
+    """
+    sorted_ids = ",".join(sorted(data.get("revoked", [])))
+    updated = data.get("updated", "")
+    canonical = f"{sorted_ids}:{updated}"
+    signature = private_key.sign(canonical.encode("utf-8"))
+    return base64.b64encode(signature).decode("ascii")
+
+
 def cmd_revoke(args):
     revoked_file = args.revoked_file or "revoked.json"
 
@@ -195,6 +208,17 @@ def cmd_revoke(args):
         data["messages"][lid] = args.message
 
     data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # Sign the revocation list if a private key is provided
+    if args.private_key:
+        private_key = load_private_key(args.private_key)
+        data["signature"] = sign_revocation_list(data, private_key)
+        print(f"Revocation list signed with Ed25519")
+    else:
+        # Remove stale signature if no key provided
+        data.pop("signature", None)
+        print("WARNING: No --private-key provided. Revocation list is UNSIGNED.")
+        print("         Clients with signature verification enabled will reject this list.")
 
     with open(revoked_file, "w") as f:
         json.dump(data, f, indent=2)
@@ -266,6 +290,7 @@ def main():
     rev.add_argument("--license-id", required=True, help="License UUID to revoke")
     rev.add_argument("--message", default="", help="Reason for revocation")
     rev.add_argument("--revoked-file", default="revoked.json", help="Path to revocation list JSON")
+    rev.add_argument("--private-key", default=None, help="Path to Ed25519 private key PEM (signs the revocation list)")
 
     # -- inspect --
     ins = subparsers.add_parser("inspect", help="Show license info without verifying signature")
