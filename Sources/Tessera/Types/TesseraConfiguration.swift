@@ -14,7 +14,7 @@ public struct TesseraConfiguration: Sendable {
     public let publicKeyBase64: String
 
     /// URL of the revocation list JSON file (e.g. hosted on your domain or GitHub Pages).
-    /// Format: { "revoked": ["uuid1", "uuid2"], "messages": { "uuid1": "reason" } }
+    /// Format: { "revoked": ["uuid1", "uuid2"], "messages": { "uuid1": "reason" }, "signature": "<base64>" }
     public let revocationURL: URL
 
     /// Number of days for the free trial period. Set to 0 to disable trials.
@@ -50,6 +50,11 @@ public struct TesseraConfiguration: Sendable {
     /// Shared secret for authenticating with the trial registry.
     /// Must match the TRIAL_SECRET configured on the Cloudflare Worker.
     /// Only needed if trialRegistryURL is set.
+    ///
+    /// Note: This secret is embedded in the binary and can be extracted by a determined attacker.
+    /// It provides a speed bump against casual attacks but is not a strong security boundary.
+    /// The server-side Ed25519 response signing (via `responseVerificationKeyBase64`) provides
+    /// stronger protection against response forgery.
     public let trialRegistrySecret: String?
 
     /// Maximum number of devices that can simultaneously use a single license key.
@@ -59,19 +64,39 @@ public struct TesseraConfiguration: Sendable {
     /// this value is sent as a hint but the server has the final say.
     public let maxDevicesPerLicense: Int
 
+    /// Your Apple Developer Team ID (e.g. "ABC123XYZ").
+    /// When set, runtime integrity checks verify the binary was signed by this specific team,
+    /// preventing re-signing attacks where an attacker modifies the binary and signs with
+    /// their own certificate. Strongly recommended for release builds.
+    public let expectedTeamID: String?
+
+    /// Ed25519 public key (32 bytes, base64-encoded) for verifying server responses.
+    /// The corresponding private key is held by the Cloudflare Worker and used to sign
+    /// all trial/activation API responses. This provides asymmetric authentication that
+    /// cannot be forged even if the `trialRegistrySecret` is extracted from the binary.
+    /// Only needed if trialRegistryURL is set.
+    public let responseVerificationKeyBase64: String?
+
+    /// Allowed origin for CORS on the trial/activation API.
+    /// Passed to the worker configuration. Not used client-side.
+    public let allowedOrigin: String?
+
     public init(
         publicKeyBase64: String,
         revocationURL: URL,
         trialDurationDays: Int = 14,
         appIdentifier: String,
-        offlineGracePeriodDays: Int = 30,
+        offlineGracePeriodDays: Int = 7,
         revocationCheckIntervalHours: Int = 24,
         trialSalt: String = "tessera-v1",
         purchaseURL: URL? = nil,
         appDisplayName: String = "App",
         trialRegistryURL: URL? = nil,
         trialRegistrySecret: String? = nil,
-        maxDevicesPerLicense: Int = 0
+        maxDevicesPerLicense: Int = 0,
+        expectedTeamID: String? = nil,
+        responseVerificationKeyBase64: String? = nil,
+        allowedOrigin: String? = nil
     ) {
         self.publicKeyBase64 = publicKeyBase64
         self.revocationURL = revocationURL
@@ -85,5 +110,8 @@ public struct TesseraConfiguration: Sendable {
         self.trialRegistryURL = trialRegistryURL
         self.trialRegistrySecret = trialRegistrySecret
         self.maxDevicesPerLicense = maxDevicesPerLicense
+        self.expectedTeamID = expectedTeamID
+        self.responseVerificationKeyBase64 = responseVerificationKeyBase64
+        self.allowedOrigin = allowedOrigin
     }
 }

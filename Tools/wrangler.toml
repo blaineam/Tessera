@@ -20,3 +20,5 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 #   npx wrangler secret put GITHUB_REPO
 #   npx wrangler secret put GITHUB_WORKFLOW_ID
 #   npx wrangler secret put TRIAL_SECRET
+#   npx wrangler secret put RESPONSE_SIGNING_KEY       # Ed25519 private key (base64, 32 bytes) for signing responses
+#   npx wrangler secret put ALLOWED_ORIGIN              # CORS origin (e.g. "https://yourdomain.com"), leave empty to disable CORS

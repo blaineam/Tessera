@@ -60,6 +60,9 @@ public final class Tessera: ObservableObject {
         self.trialManager = TrialManager(configuration: configuration)
         self.activationManager = ActivationManager(configuration: configuration)
         self.keychain = KeychainStore(appIdentifier: configuration.appIdentifier)
+
+        // Configure integrity checker with Team ID for hardened code signing verification
+        IntegrityChecker.expectedTeamID = configuration.expectedTeamID
     }
 
     // MARK: - Public API

@@ -63,7 +63,7 @@ struct KeychainStore {
 
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
 
         var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -72,12 +72,12 @@ struct KeychainStore {
             // Item doesn't exist — add it
             var addQuery = query
             addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
             status = SecItemAdd(addQuery as CFDictionary, nil)
         }
 
         guard status == errSecSuccess else {
-            throw TesseraError.keychainError("Keychain write failed with status \(status)")
+            throw TesseraError.keychainError("Keychain write failed")
         }
     }
 

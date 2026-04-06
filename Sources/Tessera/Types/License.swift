@@ -63,10 +63,18 @@ public struct TesseraLicenseKey: Sendable {
     /// Base64URL-decoded signature bytes.
     public let signatureData: Data
 
+    /// Maximum reasonable length for a license key string.
+    /// A typical key is ~200 chars; 2048 provides generous headroom.
+    private static let maxKeyLength = 2048
+
     /// Parse a raw license key string into its components.
     /// Format: TESS-<base64url_payload>.<base64url_signature>
     public init(rawKey: String) throws {
         let trimmed = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard trimmed.count <= Self.maxKeyLength else {
+            throw TesseraError.invalidKeyFormat
+        }
 
         guard trimmed.hasPrefix(Self.prefix) else {
             throw TesseraError.invalidKeyFormat

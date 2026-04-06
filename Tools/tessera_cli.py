@@ -174,6 +174,29 @@ def cmd_verify(args):
         sys.exit(2)
 
 
+def sign_revocation_list(data: dict, private_key: Ed25519PrivateKey) -> str:
+    """Sign the revocation list with Ed25519.
+
+    Canonical message: sorted revoked IDs joined by "," + ":" + updated timestamp.
+    This must match the verification logic in RevocationChecker.swift.
+    """
+    sorted_ids = ",".join(sorted(data.get("revoked", [])))
+    updated = data.get("updated", "")
+    canonical = f"{sorted_ids}:{updated}"
+    signature = private_key.sign(canonical.encode("utf-8"))
+    return base64.b64encode(signature).decode("ascii")
+
+
+def validate_license_id(lid: str) -> bool:
+    """Validate that a license ID is a valid UUID (prevents comma/colon injection
+    in the revocation list canonical format used for signing)."""
+    try:
+        uuid.UUID(lid)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
 def cmd_revoke(args):
     revoked_file = args.revoked_file or "revoked.json"
 
@@ -188,19 +211,64 @@ def cmd_revoke(args):
         data = {"revoked": data, "messages": {}, "updated": ""}
 
     lid = args.license_id
+    if not validate_license_id(lid):
+        print(f"ERROR: Invalid license ID format (must be a valid UUID): {lid}", file=sys.stderr)
+        sys.exit(1)
+
     if lid not in data["revoked"]:
         data["revoked"].append(lid)
 
     if args.message:
-        data["messages"][lid] = args.message
+        # Limit message length and strip control characters to prevent injection
+        msg = args.message[:500]
+        msg = "".join(c for c in msg if c.isprintable() or c == " ")
+        data["messages"][lid] = msg
 
     data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # Sign the revocation list if a private key is provided
+    if args.private_key:
+        private_key = load_private_key(args.private_key)
+        data["signature"] = sign_revocation_list(data, private_key)
+        print(f"Revocation list signed with Ed25519")
+    else:
+        # Remove stale signature if no key provided
+        data.pop("signature", None)
+        print("WARNING: No --private-key provided. Revocation list is UNSIGNED.")
+        print("         Clients with signature verification enabled will reject this list.")
 
     with open(revoked_file, "w") as f:
         json.dump(data, f, indent=2)
 
     print(f"Revoked license {lid}")
     print(f"Revocation list saved to: {revoked_file}")
+
+
+def cmd_sign_revocation_list(args):
+    """Sign an existing revocation list without adding a new revocation."""
+    revoked_file = args.revoked_file or "revoked.json"
+
+    if not os.path.exists(revoked_file):
+        print(f"ERROR: Revocation list not found: {revoked_file}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(revoked_file, "r") as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        data = {"revoked": data, "messages": {}, "updated": ""}
+
+    if not data.get("updated"):
+        data["updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    private_key = load_private_key(args.private_key)
+    data["signature"] = sign_revocation_list(data, private_key)
+
+    with open(revoked_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+    print(f"Revocation list signed ({len(data.get('revoked', []))} entries)")
+    print(f"Saved to: {revoked_file}")
 
 
 def cmd_inspect(args):
@@ -266,6 +334,12 @@ def main():
     rev.add_argument("--license-id", required=True, help="License UUID to revoke")
     rev.add_argument("--message", default="", help="Reason for revocation")
     rev.add_argument("--revoked-file", default="revoked.json", help="Path to revocation list JSON")
+    rev.add_argument("--private-key", default=None, help="Path to Ed25519 private key PEM (signs the revocation list)")
+
+    # -- sign-revocation-list --
+    srl = subparsers.add_parser("sign-revocation-list", help="Sign an existing revocation list")
+    srl.add_argument("--private-key", required=True, help="Path to Ed25519 private key PEM")
+    srl.add_argument("--revoked-file", default="revoked.json", help="Path to revocation list JSON")
 
     # -- inspect --
     ins = subparsers.add_parser("inspect", help="Show license info without verifying signature")
@@ -278,6 +352,7 @@ def main():
         "generate": cmd_generate,
         "verify": cmd_verify,
         "revoke": cmd_revoke,
+        "sign-revocation-list": cmd_sign_revocation_list,
         "inspect": cmd_inspect,
     }
     commands[args.command](args)
