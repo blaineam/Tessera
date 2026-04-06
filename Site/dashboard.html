@@ -1012,12 +1012,14 @@ async function addLicense() {
             const licenseKey = await signLicenseLocal(signingKeyPem, payload);
 
             const nowISO = new Date().toISOString();
+            // Do NOT include the license key or customer email in the entry
+            // that gets committed to the (potentially public) GitHub repo.
+            // The key is shown to the user once via showKeyOutput and emailed separately.
             const entry = {
                 lid, tier,
                 issued: nowISO,
                 expires: durationDays === 0 ? 'perpetual' : new Date(exp * 1000).toISOString(),
-                nickname, key: licenseKey,
-                customer_email: email,
+                nickname,
                 subscription: { active: false, interval: 'yearly', next_renewal: '' },
                 revoked: false
             };

@@ -318,10 +318,12 @@ async function computeHMAC(message, secret) {
 }
 
 function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  // Avoid early return on length mismatch to prevent timing oracle.
+  // Always iterate over the longer string to keep comparison time constant.
+  const len = Math.max(a.length, b.length);
+  let mismatch = a.length ^ b.length; // non-zero if lengths differ
+  for (let i = 0; i < len; i++) {
+    mismatch |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return mismatch === 0;
 }
@@ -842,10 +844,11 @@ async function verifyStripeWebhook(payload, sigHeader, secret) {
     .map(b => b.toString(16).padStart(2, "0"))
     .join("");
 
-  if (expectedSig.length !== signature.length) return null;
-  let mismatch = 0;
-  for (let i = 0; i < expectedSig.length; i++) {
-    mismatch |= expectedSig.charCodeAt(i) ^ signature.charCodeAt(i);
+  // Constant-time comparison: avoid early return on length mismatch
+  const sigLen = Math.max(expectedSig.length, signature.length);
+  let mismatch = expectedSig.length ^ signature.length;
+  for (let i = 0; i < sigLen; i++) {
+    mismatch |= (expectedSig.charCodeAt(i) || 0) ^ (signature.charCodeAt(i) || 0);
   }
   if (mismatch !== 0) return null;
 
