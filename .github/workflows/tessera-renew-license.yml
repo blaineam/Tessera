@@ -91,6 +91,13 @@ jobs:
             echo "::error::nickname contains disallowed characters"
             exit 1
           fi
+          # Validate Stripe customer ID format (if provided) to prevent URL injection
+          if [ -n "$INPUT_STRIPE_CUSTOMER_ID" ]; then
+            if ! echo "$INPUT_STRIPE_CUSTOMER_ID" | grep -qE '^cus_[A-Za-z0-9]+$'; then
+              echo "::error::stripe_customer_id has invalid format"
+              exit 1
+            fi
+          fi
 
       - name: Checkout
         uses: actions/checkout@v4

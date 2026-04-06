@@ -342,12 +342,21 @@ async function computeResponseSignature(action, fingerprint, nonce, registeredAt
 //
 // Uses the same HMAC authentication as the trial registry.
 
+// Validate license_id format (UUID-like) to prevent KV key injection
+function isValidLicenseId(id) {
+  return typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
 async function handleActivationActivate(request, env, corsHeaders) {
   const body = await request.json();
   const { license_id, fingerprint, app_id, timestamp, request_hmac } = body;
 
   if (!license_id || !fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidLicenseId(license_id)) {
+    return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
   }
 
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
@@ -454,6 +463,10 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
   }
 
+  if (!isValidLicenseId(license_id)) {
+    return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
+  }
+
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
   if (!validRequest) {
     return jsonResponse({ error: "unauthorized" }, 401, corsHeaders);
@@ -469,17 +482,29 @@ async function handleActivationDeactivate(request, env, corsHeaders) {
 
   const existing = await env.TRIAL_KV.get(kvKey);
   let record = existing ? safeJsonParse(existing, { devices: [] }) : { devices: [] };
+  if (!Array.isArray(record.devices)) record.devices = [];
 
   // Remove this device
   record.devices = record.devices.filter(d => d.fingerprint !== fingerprint);
   await env.TRIAL_KV.put(kvKey, JSON.stringify(record));
 
+  // Re-read to confirm deactivation took effect (TOCTOU mitigation)
+  const verifyRaw = await env.TRIAL_KV.get(kvKey);
+  const verifyRecord = verifyRaw ? safeJsonParse(verifyRaw, { devices: [] }) : { devices: [] };
+  const stillActive = (verifyRecord.devices || []).some(d => d.fingerprint === fingerprint);
+  if (stillActive) {
+    // Race condition — retry removal
+    verifyRecord.devices = (verifyRecord.devices || []).filter(d => d.fingerprint !== fingerprint);
+    await env.TRIAL_KV.put(kvKey, JSON.stringify(verifyRecord));
+  }
+
+  const finalDeviceCount = stillActive ? verifyRecord.devices.length : record.devices.length;
   const action = "deactivate:ok";
   const responseHMAC = await computeResponseHMAC(action, fingerprint, nonce, "", env.TRIAL_SECRET);
   const ed25519Sig = await computeResponseSignature(action, fingerprint, nonce, "", env.RESPONSE_SIGNING_KEY);
   return jsonResponse({
     deactivated: true,
-    device_count: record.devices.length,
+    device_count: finalDeviceCount,
     nonce,
     hmac: responseHMAC,
     ...(ed25519Sig && { ed25519_sig: ed25519Sig })
@@ -492,6 +517,10 @@ async function handleActivationCheck(request, env, corsHeaders) {
 
   if (!license_id || !fingerprint || !app_id || !timestamp || !request_hmac) {
     return jsonResponse({ error: "missing fields" }, 400, corsHeaders);
+  }
+
+  if (!isValidLicenseId(license_id)) {
+    return jsonResponse({ error: "invalid license_id format" }, 400, corsHeaders);
   }
 
   const validRequest = await verifyRequestHMAC(fingerprint, app_id, timestamp, request_hmac, env.TRIAL_SECRET);
