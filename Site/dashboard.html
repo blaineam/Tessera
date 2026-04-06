@@ -727,7 +727,7 @@ function renderTable() {
 
     for (const lic of sorted) {
         const status = getStatus(lic);
-        const nick = lic.nickname || '';
+        const nick = escHtml(lic.nickname || '');
         const lid = lic.lid || '';
         if (search && !nick.toLowerCase().includes(search) && !lid.toLowerCase().includes(search) && !(lic.tier||'').toLowerCase().includes(search)) continue;
 
@@ -1065,10 +1065,10 @@ async function addLicense() {
 function showKeyOutput(licenseKey, lid, tier, durationDays, email) {
     document.getElementById('keyOutputText').textContent = licenseKey;
     let meta = '';
-    if (lid) meta += `<strong>ID:</strong> ${lid}<br>`;
+    if (lid) meta += `<strong>ID:</strong> ${escHtml(lid)}<br>`;
     meta += `<strong>Tier:</strong> ${tier}<br>`;
     meta += `<strong>Expires:</strong> ${durationDays === 0 ? 'Perpetual' : durationDays + ' days'}<br>`;
-    if (email) meta += `<strong>Emailed to:</strong> ${email}`;
+    if (email) meta += `<strong>Emailed to:</strong> ${escHtml(email)}`;
     document.getElementById('keyOutputMeta').innerHTML = meta;
     document.getElementById('keyOutputModal').classList.add('active');
 }
