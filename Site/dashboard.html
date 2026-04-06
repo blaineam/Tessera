@@ -388,7 +388,15 @@ function activeApp() {
 (function init() {
     const saved = localStorage.getItem('tessera_config');
     if (saved) {
-        const parsed = JSON.parse(saved);
+        let parsed;
+        try {
+            parsed = JSON.parse(saved);
+        } catch {
+            // Corrupted localStorage — clear and show setup screen
+            localStorage.removeItem('tessera_config');
+            localStorage.removeItem('tessera_signing_key');
+            return;
+        }
 
         // Migrate old single-app config format
         if (!parsed.apps) {
