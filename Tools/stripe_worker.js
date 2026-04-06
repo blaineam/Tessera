@@ -723,7 +723,10 @@ async function handleInvoicePaid(invoice, env) {
 async function handleSubscriptionCanceled(subscription, env) {
   const metadata = subscription.metadata || {};
   if (metadata.license_id && metadata.auto_revoke === "true") {
-    console.log(`Subscription canceled, would auto-revoke ${metadata.license_id}`);
+    // Validate license_id format before logging to prevent log injection
+    if (isValidLicenseId(metadata.license_id)) {
+      console.log(`Subscription canceled, would auto-revoke ${metadata.license_id}`);
+    }
   }
 }
 
