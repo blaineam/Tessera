@@ -215,6 +215,8 @@ The dashboard supports multiple apps via tabs. Each app is configured with:
 
 Add apps in the initial setup screen or via Settings.
 
+> **Encryption note:** Any PII (customer emails, names) stored in license data is encrypted end-to-end in the dashboard. The encryption key never leaves your browser, so GitHub (the storage backend) cannot read customer data at rest.
+
 ---
 
 ## Dual Distribution (App Store + Direct)
@@ -346,7 +348,7 @@ The activation system uses the same Cloudflare Worker as the trial registry.
 | `revocationURL` | URL | required | URL to `revoked.json` |
 | `trialDurationDays` | Int | 14 | Trial length (0 = no trial, license required immediately) |
 | `appIdentifier` | String | required | Bundle ID (used for Keychain namespace) |
-| `offlineGracePeriodDays` | Int | 30 | Days without revocation check allowed |
+| `offlineGracePeriodDays` | Int | 7 | Days without revocation check allowed |
 | `revocationCheckIntervalHours` | Int | 24 | Revocation cache TTL (foreground checks always bypass) |
 | `trialSalt` | String | "tessera-v1" | Salt for trial tokens (change between major versions) |
 | `purchaseURL` | URL? | nil | Link to purchase page |
@@ -354,6 +356,9 @@ The activation system uses the same Cloudflare Worker as the trial registry.
 | `trialRegistryURL` | URL? | nil | Cloudflare Worker URL for server-side trials + activation |
 | `trialRegistrySecret` | String? | nil | Shared secret for Worker authentication |
 | `maxDevicesPerLicense` | Int | 0 | Max devices per license (0 = unlimited) |
+| `expectedTeamID` | String? | nil | Apple Team ID for binary signing verification |
+| `responseVerificationKeyBase64` | String? | nil | Ed25519 key for server response verification |
+| `allowedOrigin` | String? | nil | CORS origin for trial/activation API |
 
 ---
 
