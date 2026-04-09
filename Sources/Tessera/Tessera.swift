@@ -70,6 +70,7 @@ public final class Tessera: ObservableObject {
     /// Evaluate the current licensing state.
     ///
     /// This checks (in order):
+    /// 0. StoreKit 2 environment (App Store / TestFlight → skip licensing)
     /// 1. Binary integrity
     /// 2. Stored license key validity + expiry
     /// 3. Revocation status (async, cached)
@@ -77,6 +78,13 @@ public final class Tessera: ObservableObject {
     ///
     /// Call this on app launch and periodically (e.g. when app becomes active).
     public func evaluate() async {
+        // Step 0: Resolve distribution environment via StoreKit 2
+        await TesseraBuildInfo.resolve()
+        if TesseraBuildInfo.isAppStore {
+            state = .appStore
+            return
+        }
+
         // Step 1: Integrity check
         do {
             try IntegrityChecker.verify()

@@ -67,7 +67,7 @@ public struct TesseraStatusView: View {
     private var statusIcon: some View {
         Group {
             switch tessera.state {
-            case .licensed:
+            case .licensed, .appStore:
                 Image(systemName: "checkmark.seal.fill")
             case .trial:
                 Image(systemName: "clock.fill")
@@ -83,7 +83,7 @@ public struct TesseraStatusView: View {
 
     private var statusColor: Color {
         switch tessera.state {
-        case .licensed: return .green
+        case .licensed, .appStore: return .green
         case .trial: return .blue
         case .trialExpired, .expired: return .orange
         case .revoked: return .red

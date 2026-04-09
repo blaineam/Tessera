@@ -21,11 +21,13 @@ public enum TesseraState: Sendable {
     case revoked(TesseraLicense, message: String?)
     /// No license or trial — app is locked.
     case unlicensed
+    /// Distributed via the App Store or TestFlight — licensing is not enforced.
+    case appStore
 
     /// Whether the app should be unlocked (usable).
     public var isUnlocked: Bool {
         switch self {
-        case .licensed, .trial:
+        case .licensed, .trial, .appStore:
             return true
         case .expired, .revoked, .trialExpired, .unlicensed:
             return false
@@ -54,6 +56,8 @@ public enum TesseraState: Sendable {
             return message ?? "License revoked"
         case .unlicensed:
             return "No license"
+        case .appStore:
+            return "App Store"
         }
     }
 }
