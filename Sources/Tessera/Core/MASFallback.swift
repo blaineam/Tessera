@@ -119,8 +119,20 @@ public struct TesseraBuildInfo {
                 _resolvedEnvironment = transaction.environment
             }
         } catch {
-            // No AppTransaction available — direct distribution or notarized build.
-            // _resolvedEnvironment stays nil → isAppStore returns false → licensing enforced.
+            // AppTransaction unavailable — common on macOS TestFlight first launch.
+            // Fall back to receipt URL path check (checks the URL, not file existence,
+            // so it's safe even when the receipt hasn't been written to disk yet).
+            if let receiptURL = Bundle.main.appStoreReceiptURL {
+                let lastComponent = receiptURL.lastPathComponent
+                if lastComponent == "sandboxReceipt" {
+                    // TestFlight / sandbox environment
+                    _resolvedEnvironment = .sandbox
+                } else if lastComponent == "receipt" {
+                    // App Store production
+                    _resolvedEnvironment = .production
+                }
+            }
+            // If neither matched → direct distribution → licensing enforced.
         }
         #endif
     }
