@@ -109,26 +109,31 @@ public struct TesseraBuildInfo {
         #if targetEnvironment(simulator)
         return
         #else
-        // AppTransaction.shared can throw on macOS TestFlight first launch
-        // before StoreKit is fully initialized. Retry a few times with a brief
-        // delay to give it a chance to become available.
-        for attempt in 1...3 {
-            do {
-                let result = try await AppTransaction.shared
-                switch result {
-                case .verified(let transaction):
-                    _resolvedEnvironment = transaction.environment
-                case .unverified(let transaction, _):
-                    _resolvedEnvironment = transaction.environment
-                }
-                return // Success — done
-            } catch {
-                if attempt < 3 {
-                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000) // 0.5s, 1s
-                }
-                // Final attempt failed → _resolvedEnvironment stays nil → licensing enforced
-            }
+        // Try the local cached AppTransaction first
+        if let env = Self.extractEnvironment(try? await AppTransaction.shared) {
+            _resolvedEnvironment = env
+            return
         }
+
+        // .shared can fail if there's no local cache (e.g. macOS TestFlight).
+        // .refresh() forces a server-side fetch from the App Store.
+        if let env = Self.extractEnvironment(try? await AppTransaction.refresh()) {
+            _resolvedEnvironment = env
+            return
+        }
+
+        // Both failed → direct distribution → licensing enforced
         #endif
+    }
+
+    /// Extract the environment from an AppTransaction verification result.
+    private static func extractEnvironment(_ result: VerificationResult<AppTransaction>?) -> AppStore.Environment? {
+        guard let result else { return nil }
+        switch result {
+        case .verified(let transaction):
+            return transaction.environment
+        case .unverified(let transaction, _):
+            return transaction.environment
+        }
     }
 }
