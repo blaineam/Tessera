@@ -87,8 +87,8 @@ public struct TesseraBuildInfo {
     /// Whether this app is running as an App Store or TestFlight build.
     ///
     /// Returns `true` if StoreKit 2 has resolved the environment as `.production`
-    /// or `.sandbox`. Before resolution, returns `false` (safe default — the gate
-    /// modifier will resolve via `evaluate()` before making licensing decisions).
+    /// or `.sandbox`. Returns `false` for `.xcode` (so licensing can be tested
+    /// during development) and when AppTransaction throws (direct distribution).
     public static var isAppStore: Bool {
         guard let env = _resolvedEnvironment else { return false }
         return env == .production || env == .sandbox
