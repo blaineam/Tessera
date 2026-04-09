@@ -113,25 +113,55 @@ public struct TesseraBuildInfo {
         logger.info("Tessera: Simulator detected — skipping AppTransaction")
         return
         #else
-        logger.info("Tessera: Resolving distribution environment via AppTransaction.shared...")
+        logger.notice("Tessera: Resolving distribution environment via AppTransaction.shared...")
+        logger.notice("Tessera: bundleID=\(Bundle.main.bundleIdentifier ?? "nil", privacy: .public)")
 
+        // Try AppTransaction.shared first (uses local cache)
         do {
             let result = try await AppTransaction.shared
-            switch result {
-            case .verified(let transaction):
-                _resolvedEnvironment = transaction.environment
-                logger.notice("Tessera: AppTransaction VERIFIED — environment=\(String(describing: transaction.environment), privacy: .public)")
-            case .unverified(let transaction, let error):
-                _resolvedEnvironment = transaction.environment
-                logger.warning("Tessera: AppTransaction UNVERIFIED — environment=\(String(describing: transaction.environment), privacy: .public), verificationError=\(String(describing: error), privacy: .public)")
-            }
-
-            let isStore = isAppStore
-            logger.notice("Tessera: isAppStore=\(isStore, privacy: .public), resolvedEnvironment=\(String(describing: _resolvedEnvironment), privacy: .public)")
+            applyResult(result, source: "shared")
+            return
         } catch {
-            logger.error("Tessera: AppTransaction.shared THREW — error=\(error.localizedDescription, privacy: .public), type=\(String(describing: type(of: error)), privacy: .public)")
-            // _resolvedEnvironment stays nil → isAppStore returns false → licensing enforced
+            logError(error, source: "shared")
         }
+
+        // .shared failed. In release builds (TestFlight / App Store), try .refresh()
+        // which fetches from the App Store server. Skip in DEBUG to avoid an
+        // Apple ID login prompt during Xcode development.
+        #if !DEBUG
+        logger.notice("Tessera: .shared failed in release build — trying AppTransaction.refresh()...")
+        do {
+            let result = try await AppTransaction.refresh()
+            applyResult(result, source: "refresh")
+            return
+        } catch {
+            logError(error, source: "refresh")
+        }
+        #else
+        logger.notice("Tessera: .shared failed in DEBUG build — skipping .refresh() to avoid Apple ID prompt")
         #endif
+
+        logger.error("Tessera: All AppTransaction attempts failed — licensing will be enforced")
+        #endif
+    }
+
+    private static func applyResult(_ result: VerificationResult<AppTransaction>, source: String) {
+        switch result {
+        case .verified(let transaction):
+            _resolvedEnvironment = transaction.environment
+            logger.notice("Tessera: AppTransaction.\(source, privacy: .public) VERIFIED — environment=\(String(describing: transaction.environment), privacy: .public), bundleID=\(transaction.bundleID, privacy: .public), appID=\(String(describing: transaction.appID), privacy: .public)")
+        case .unverified(let transaction, let verificationError):
+            _resolvedEnvironment = transaction.environment
+            logger.warning("Tessera: AppTransaction.\(source, privacy: .public) UNVERIFIED — environment=\(String(describing: transaction.environment), privacy: .public), verificationError=\(String(describing: verificationError), privacy: .public)")
+        }
+        logger.notice("Tessera: isAppStore=\(isAppStore, privacy: .public)")
+    }
+
+    private static func logError(_ error: Error, source: String) {
+        let nsError = error as NSError
+        logger.error("Tessera: AppTransaction.\(source, privacy: .public) THREW — domain=\(nsError.domain, privacy: .public), code=\(nsError.code, privacy: .public), description=\(nsError.localizedDescription, privacy: .public)")
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            logger.error("Tessera: underlying error — domain=\(underlying.domain, privacy: .public), code=\(underlying.code, privacy: .public), description=\(underlying.localizedDescription, privacy: .public)")
+        }
     }
 }
