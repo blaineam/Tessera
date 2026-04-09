@@ -22,7 +22,7 @@ Tessera is a complete, self-contained licensing platform for macOS and iOS apps 
 - **Management dashboard** — multi-app tabs, generate signed keys, revoke licenses
 - **GitHub Action CI** — generate licenses per-app from anywhere
 - **Marketing site** — glassmorphic GitHub Pages site ready to deploy
-- **Dual App Store / Direct distribution** — single codebase, automatic runtime detection
+- **Dual App Store / Direct distribution** — single codebase, automatic detection via StoreKit 2 `AppTransaction`
 - **TestFlight support** — treated as App Store on both macOS and iOS
 
 All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and Cloudflare Workers (free tier).
@@ -34,7 +34,7 @@ All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and C
 ```
 Tessera/
 ├── Sources/Tessera/          # Swift Package — the library you import
-│   ├── Core/                 # License validator, revocation, keychain, MAS detection
+│   ├── Core/                 # License validator, revocation, keychain, StoreKit 2 detection
 │   ├── Trial/                # Hardware-anchored trial system
 │   ├── Security/             # Binary integrity checker
 │   ├── UI/                   # SwiftUI gate, activation view, status badge
@@ -144,7 +144,7 @@ struct MyApp: App {
 }
 ```
 
-> **Note:** `tesseraGateIfNeeded` is the recommended entry point. It automatically detects App Store and TestFlight builds at runtime and skips the licensing gate — no compiler flags needed. Use `tesseraGate` if you always want to enforce licensing regardless of distribution channel.
+> **Note:** `tesseraGateIfNeeded` is the recommended entry point. It uses StoreKit 2's `AppTransaction` to detect App Store and TestFlight builds at runtime and skips the licensing gate — no compiler flags needed. Use `tesseraGate` if you always want to enforce licensing regardless of distribution channel.
 
 ### 5. Set up per-app data
 
@@ -223,18 +223,46 @@ Add apps in the initial setup screen or via Settings.
 
 Support both App Store and direct distribution from one codebase — **no compiler flags needed**.
 
-Tessera detects the distribution channel at runtime:
+Tessera uses **StoreKit 2's `AppTransaction`** to reliably detect the distribution environment at runtime:
 
-| Platform | App Store | TestFlight | Xcode / Direct |
-|----------|-----------|------------|----------------|
-| **macOS** | `_MASReceipt/receipt` exists on disk | `sandboxReceipt` filename | No receipt file on disk |
-| **iOS** | No `embedded.mobileprovision` | No `embedded.mobileprovision` | Has `embedded.mobileprovision` |
-| **Simulator** | — | — | Always treated as direct build |
+| Environment | `AppTransaction.environment` | Licensing |
+|-------------|------------------------------|-----------|
+| **App Store** | `.production` | Skipped — gate is a no-op |
+| **TestFlight** | `.sandbox` | Skipped — gate is a no-op |
+| **Xcode** | `.xcode` | Enforced |
+| **Direct / Notarized** | Error (no transaction) | Enforced |
+| **Simulator** | — | Enforced (early return) |
 
 ```swift
 // Automatically a no-op on App Store and TestFlight builds
 ContentView()
     .tesseraGateIfNeeded(tessera)
+```
+
+### How it works
+
+On app launch, `evaluate()` calls `AppTransaction.shared` to resolve the distribution environment. The result is cached for the lifetime of the process.
+
+- **App Store** (`.production`) and **TestFlight** (`.sandbox`) builds set the state to `.appStore`, which `isUnlocked` treats as `true`. All licensing checks (integrity, revocation, trials) are skipped.
+- **Xcode** builds (`.xcode`) and **direct distribution** builds (where `AppTransaction` throws because there's no App Store transaction) proceed through normal license enforcement.
+- **Simulator** builds return early before the StoreKit 2 check and are always treated as direct builds.
+
+This approach is more reliable than the legacy receipt-file heuristic, which could fail on macOS App Store first launch before the receipt was written to disk.
+
+### TesseraState.appStore
+
+The `.appStore` state is returned by `evaluate()` when StoreKit 2 detects an App Store or TestFlight environment. It returns `true` for `isUnlocked`. If you have exhaustive switches on `TesseraState`, add a case for `.appStore`:
+
+```swift
+switch tessera.state {
+case .licensed(let license): // ...
+case .trial(let days):       // ...
+case .appStore:              // App Store / TestFlight — no license needed
+case .expired(let license):  // ...
+case .revoked(_, let msg):   // ...
+case .trialExpired:          // ...
+case .unlicensed:            // ...
+}
 ```
 
 TestFlight builds on **both macOS and iOS** are treated as App Store installs — users won't see a licensing prompt.
