@@ -17,8 +17,11 @@
 //  On direct distribution builds, it enforces licensing.
 //
 
+import os.log
 import StoreKit
 import SwiftUI
+
+private let logger = Logger(subsystem: "com.tessera.licensing", category: "AppTransaction")
 
 public extension View {
     /// Conditionally applies the Tessera licensing gate.
@@ -107,33 +110,28 @@ public struct TesseraBuildInfo {
 
         // Simulator is never App Store
         #if targetEnvironment(simulator)
+        logger.info("Tessera: Simulator detected — skipping AppTransaction")
         return
         #else
-        // Try the local cached AppTransaction first
-        if let env = Self.extractEnvironment(try? await AppTransaction.shared) {
-            _resolvedEnvironment = env
-            return
-        }
+        logger.info("Tessera: Resolving distribution environment via AppTransaction.shared...")
 
-        // .shared can fail if there's no local cache (e.g. macOS TestFlight).
-        // .refresh() forces a server-side fetch from the App Store.
-        if let env = Self.extractEnvironment(try? await AppTransaction.refresh()) {
-            _resolvedEnvironment = env
-            return
-        }
+        do {
+            let result = try await AppTransaction.shared
+            switch result {
+            case .verified(let transaction):
+                _resolvedEnvironment = transaction.environment
+                logger.notice("Tessera: AppTransaction VERIFIED — environment=\(String(describing: transaction.environment), privacy: .public)")
+            case .unverified(let transaction, let error):
+                _resolvedEnvironment = transaction.environment
+                logger.warning("Tessera: AppTransaction UNVERIFIED — environment=\(String(describing: transaction.environment), privacy: .public), verificationError=\(String(describing: error), privacy: .public)")
+            }
 
-        // Both failed → direct distribution → licensing enforced
+            let isStore = isAppStore
+            logger.notice("Tessera: isAppStore=\(isStore, privacy: .public), resolvedEnvironment=\(String(describing: _resolvedEnvironment), privacy: .public)")
+        } catch {
+            logger.error("Tessera: AppTransaction.shared THREW — error=\(error.localizedDescription, privacy: .public), type=\(String(describing: type(of: error)), privacy: .public)")
+            // _resolvedEnvironment stays nil → isAppStore returns false → licensing enforced
+        }
         #endif
-    }
-
-    /// Extract the environment from an AppTransaction verification result.
-    private static func extractEnvironment(_ result: VerificationResult<AppTransaction>?) -> AppStore.Environment? {
-        guard let result else { return nil }
-        switch result {
-        case .verified(let transaction):
-            return transaction.environment
-        case .unverified(let transaction, _):
-            return transaction.environment
-        }
     }
 }
