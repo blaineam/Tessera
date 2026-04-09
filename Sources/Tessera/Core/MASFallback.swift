@@ -109,30 +109,25 @@ public struct TesseraBuildInfo {
         #if targetEnvironment(simulator)
         return
         #else
-        do {
-            let result = try await AppTransaction.shared
-            switch result {
-            case .verified(let transaction):
-                _resolvedEnvironment = transaction.environment
-            case .unverified(let transaction, _):
-                // Even unverified, the environment field is still useful
-                _resolvedEnvironment = transaction.environment
-            }
-        } catch {
-            // AppTransaction unavailable — common on macOS TestFlight first launch.
-            // Fall back to receipt URL path check (checks the URL, not file existence,
-            // so it's safe even when the receipt hasn't been written to disk yet).
-            if let receiptURL = Bundle.main.appStoreReceiptURL {
-                let lastComponent = receiptURL.lastPathComponent
-                if lastComponent == "sandboxReceipt" {
-                    // TestFlight / sandbox environment
-                    _resolvedEnvironment = .sandbox
-                } else if lastComponent == "receipt" {
-                    // App Store production
-                    _resolvedEnvironment = .production
+        // AppTransaction.shared can throw on macOS TestFlight first launch
+        // before StoreKit is fully initialized. Retry a few times with a brief
+        // delay to give it a chance to become available.
+        for attempt in 1...3 {
+            do {
+                let result = try await AppTransaction.shared
+                switch result {
+                case .verified(let transaction):
+                    _resolvedEnvironment = transaction.environment
+                case .unverified(let transaction, _):
+                    _resolvedEnvironment = transaction.environment
                 }
+                return // Success — done
+            } catch {
+                if attempt < 3 {
+                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000) // 0.5s, 1s
+                }
+                // Final attempt failed → _resolvedEnvironment stays nil → licensing enforced
             }
-            // If neither matched → direct distribution → licensing enforced.
         }
         #endif
     }
