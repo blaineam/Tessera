@@ -22,8 +22,8 @@ Tessera is a complete, self-contained licensing platform for macOS and iOS apps 
 - **Management dashboard** — multi-app tabs, generate signed keys, revoke licenses
 - **GitHub Action CI** — generate licenses per-app from anywhere
 - **Marketing site** — glassmorphic GitHub Pages site ready to deploy
-- **Dual App Store / Direct distribution** — single codebase, automatic detection via StoreKit 2 `AppTransaction`
-- **TestFlight support** — treated as App Store on both macOS and iOS
+- **Dual App Store / Direct distribution** — single codebase, compile-time flag separates builds
+- **TestFlight support** — App Store scheme covers both production and TestFlight
 
 All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and Cloudflare Workers (free tier).
 
@@ -34,7 +34,7 @@ All of this runs on **free infrastructure**: GitHub Actions, GitHub Pages, and C
 ```
 Tessera/
 ├── Sources/Tessera/          # Swift Package — the library you import
-│   ├── Core/                 # License validator, revocation, keychain, StoreKit 2 detection
+│   ├── Core/                 # License validator, revocation, keychain, build info helpers
 │   ├── Trial/                # Hardware-anchored trial system
 │   ├── Security/             # Binary integrity checker
 │   ├── UI/                   # SwiftUI gate, activation view, status badge
@@ -138,13 +138,17 @@ struct MyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .tesseraGateIfNeeded(tessera)
+                #if APP_STORE
+                // App Store / TestFlight: no licensing gate
+                #else
+                .tesseraGate(tessera)
+                #endif
         }
     }
 }
 ```
 
-> **Note:** `tesseraGateIfNeeded` is the recommended entry point. It uses StoreKit 2's `AppTransaction` to detect App Store and TestFlight builds at runtime and skips the licensing gate — no compiler flags needed. Use `tesseraGate` if you always want to enforce licensing regardless of distribution channel.
+> **Note:** Tessera uses a compile-time `APP_STORE` flag to separate App Store and direct distribution builds. See [Dual Distribution](#dual-distribution-app-store--direct) below for setup instructions. Use `tesseraGate` (without the `IfNeeded`) in the direct distribution branch — it always enforces licensing.
 
 ### 5. Set up per-app data
 
@@ -221,51 +225,72 @@ Add apps in the initial setup screen or via Settings.
 
 ## Dual Distribution (App Store + Direct)
 
-Support both App Store and direct distribution from one codebase — **no compiler flags needed**.
+Support both App Store and direct distribution from a single codebase using **separate Xcode schemes** and a **compile-time flag**.
 
-Tessera uses **StoreKit 2's `AppTransaction`** to reliably detect the distribution environment at runtime:
+> **Why not runtime detection?** StoreKit 2's `AppTransaction.shared` is unreliable on macOS TestFlight — it can throw `SKInternalErrorDomain` errors instead of returning the expected `.sandbox` environment. A compile-time flag is deterministic and never fails.
 
-| Environment | `AppTransaction.environment` | Licensing |
-|-------------|------------------------------|-----------|
-| **App Store** | `.production` | Skipped — gate is a no-op |
-| **TestFlight** | `.sandbox` | Skipped — gate is a no-op |
-| **Xcode** | `.xcode` | Enforced |
-| **Direct / Notarized** | Error (no transaction) | Enforced |
-| **Simulator** | — | Enforced (early return) |
+### Setup
 
-```swift
-// Automatically a no-op on App Store and TestFlight builds
-ContentView()
-    .tesseraGateIfNeeded(tessera)
-```
+#### 1. Add a `Release-AppStore` build configuration
 
-### How it works
+In Xcode, go to **Project → Info → Configurations** and duplicate your existing `Release` configuration. Name it `Release-AppStore`.
 
-On app launch, `evaluate()` calls `AppTransaction.shared` to resolve the distribution environment. The result is cached for the lifetime of the process.
+#### 2. Add the `APP_STORE` compilation condition
 
-- **App Store** (`.production`) and **TestFlight** (`.sandbox`) builds set the state to `.appStore`, which `isUnlocked` treats as `true`. All licensing checks (integrity, revocation, trials) are skipped.
-- **Xcode** builds (`.xcode`) and **direct distribution** builds (where `AppTransaction` throws because there's no App Store transaction) proceed through normal license enforcement.
-- **Simulator** builds return early before the StoreKit 2 check and are always treated as direct builds.
+Select your **target** (not the project), go to **Build Settings → Swift Compiler - Custom Flags → Active Compilation Conditions**, and add `APP_STORE` to the `Release-AppStore` configuration only.
 
-This approach is more reliable than the legacy receipt-file heuristic, which could fail on macOS App Store first launch before the receipt was written to disk.
+#### 3. Create two schemes
 
-### TesseraState.appStore
+| Scheme | Purpose | Launch Config | Archive Config |
+|--------|---------|---------------|----------------|
+| **MyApp** | App Store / TestFlight | `Release-AppStore` | `Release-AppStore` |
+| **MyApp-Direct** | Notarized direct distribution | `Debug` | `Release` |
 
-The `.appStore` state is returned by `evaluate()` when StoreKit 2 detects an App Store or TestFlight environment. It returns `true` for `isUnlocked`. If you have exhaustive switches on `TesseraState`, add a case for `.appStore`:
+The App Store scheme uses `Release-AppStore` which defines `APP_STORE`, so the Tessera gate is compiled out entirely. The Direct scheme uses the standard `Release` config — no `APP_STORE` flag — so Tessera licensing is enforced.
+
+#### 4. Gate your content view
 
 ```swift
-switch tessera.state {
-case .licensed(let license): // ...
-case .trial(let days):       // ...
-case .appStore:              // App Store / TestFlight — no license needed
-case .expired(let license):  // ...
-case .revoked(_, let msg):   // ...
-case .trialExpired:          // ...
-case .unlicensed:            // ...
+import Tessera
+
+@main
+struct MyApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                #if APP_STORE
+                // App Store / TestFlight: no licensing gate
+                #else
+                .tesseraGate(tessera)
+                #endif
+        }
+    }
 }
 ```
 
-TestFlight builds on **both macOS and iOS** are treated as App Store installs — users won't see a licensing prompt.
+#### 5. Build and distribute
+
+- **App Store / TestFlight**: Archive with the `MyApp` scheme → Upload to App Store Connect
+- **Direct distribution**: Archive with the `MyApp-Direct` scheme → Notarize and distribute
+- **Xcode Cloud**: Set the workflow to use the `MyApp` scheme for TestFlight builds
+
+### TesseraState reference
+
+If you have exhaustive switches on `TesseraState`, all cases still apply in the direct distribution build:
+
+```swift
+switch tessera.state {
+case .licensed(let license): // Valid license
+case .trial(let days):       // Trial period active
+case .expired(let license):  // License expired
+case .revoked(_, let msg):   // License revoked
+case .trialExpired:          // Trial ended
+case .unlicensed:            // No license or trial
+case .appStore:              // Only reachable if using runtime detection
+}
+```
+
+The `.appStore` state is only relevant if you use the optional runtime `tesseraGateIfNeeded` modifier with `TesseraBuildInfo.resolve()`. With the compile-time approach, the gate is never applied on App Store builds, so `.appStore` is not reachable.
 
 ---
 
