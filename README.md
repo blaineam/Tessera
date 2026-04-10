@@ -138,9 +138,7 @@ struct MyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                #if APP_STORE
-                // App Store / TestFlight: no licensing gate
-                #else
+                #if DIRECT_DISTRIBUTION
                 .tesseraGate(tessera)
                 #endif
         }
@@ -148,7 +146,7 @@ struct MyApp: App {
 }
 ```
 
-> **Note:** Tessera uses a compile-time `APP_STORE` flag to separate App Store and direct distribution builds. See [Dual Distribution](#dual-distribution-app-store--direct) below for setup instructions. Use `tesseraGate` (without the `IfNeeded`) in the direct distribution branch — it always enforces licensing.
+> **Note:** Tessera uses a compile-time `DIRECT_DISTRIBUTION` flag to enable licensing only in direct distribution builds. See [Dual Distribution](#dual-distribution-app-store--direct) below for setup instructions. The default (App Store) build has no licensing code compiled in at all.
 
 ### 5. Set up per-app data
 
@@ -231,22 +229,22 @@ Support both App Store and direct distribution from a single codebase using **se
 
 ### Setup
 
-#### 1. Add a `Release-AppStore` build configuration
+#### 1. Add a `Release-Direct` build configuration
 
-In Xcode, go to **Project → Info → Configurations** and duplicate your existing `Release` configuration. Name it `Release-AppStore`.
+In Xcode, go to **Project → Info → Configurations** and duplicate your existing `Release` configuration. Name it `Release-Direct`.
 
-#### 2. Add the `APP_STORE` compilation condition
+#### 2. Add the `DIRECT_DISTRIBUTION` compilation condition
 
-Select your **target** (not the project), go to **Build Settings → Swift Compiler - Custom Flags → Active Compilation Conditions**, and add `APP_STORE` to the `Release-AppStore` configuration only.
+Select your **target** (not the project), go to **Build Settings → Swift Compiler - Custom Flags → Active Compilation Conditions**, and add `DIRECT_DISTRIBUTION` to the `Release-Direct` configuration only.
 
 #### 3. Create two schemes
 
 | Scheme | Purpose | Launch Config | Archive Config |
 |--------|---------|---------------|----------------|
-| **MyApp** | App Store / TestFlight | `Release-AppStore` | `Release-AppStore` |
-| **MyApp-Direct** | Notarized direct distribution | `Debug` | `Release` |
+| **MyApp** | App Store / TestFlight (default) | `Debug` | `Release` |
+| **MyApp-Direct** | Notarized direct distribution | `Debug` | `Release-Direct` |
 
-The App Store scheme uses `Release-AppStore` which defines `APP_STORE`, so the Tessera gate is compiled out entirely. The Direct scheme uses the standard `Release` config — no `APP_STORE` flag — so Tessera licensing is enforced.
+The default scheme uses standard `Release` — no special flags, no Tessera gate compiled in. The Direct scheme uses `Release-Direct` which defines `DIRECT_DISTRIBUTION`, so the Tessera licensing gate is included.
 
 #### 4. Gate your content view
 
@@ -258,9 +256,7 @@ struct MyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                #if APP_STORE
-                // App Store / TestFlight: no licensing gate
-                #else
+                #if DIRECT_DISTRIBUTION
                 .tesseraGate(tessera)
                 #endif
         }
