@@ -123,7 +123,19 @@
         "next_renewal": "2027-06-01T18:03:23Z"
       },
       "revoked": false
+    },
+    {
+      "lid": "4c319fd6-c2bc-49a0-a6be-6deff0851c83",
+      "tier": "pro",
+      "issued": "2026-06-24T16:32:48Z",
+      "expires": "2027-06-24T16:32:48Z",
+      "subscription": {
+        "active": false,
+        "interval": "yearly",
+        "next_renewal": "2027-06-24T16:32:48Z"
+      },
+      "revoked": false
     }
   ],
-  "updated": "2026-06-01T18:03:23Z"
+  "updated": "2026-06-24T16:32:48Z"
 }
